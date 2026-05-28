@@ -1,8 +1,7 @@
 import React, { createContext, useState, useEffect, useContext, ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
-
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+import { apiUrl, buildApiHeaders } from '../utils/api/http';
 
 interface User {
   user_id: string;
@@ -37,6 +36,41 @@ export const useAuth = () => {
 };
 
 const TOKEN_KEY = 'auth_token';
+
+const parseErrorMessage = async (response: Response, fallback: string): Promise<string> => {
+  try {
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const payload = await response.json();
+      if (typeof payload?.detail === 'string' && payload.detail.trim()) {
+        return payload.detail;
+      }
+    } else {
+      const text = await response.text();
+      if (text.trim()) return text.trim();
+    }
+  } catch {
+    // Ignore parse errors and fall back to generic message.
+  }
+  return fallback;
+};
+
+const getFriendlyAuthErrorMessage = (error: unknown, fallback: string): string => {
+  if (error instanceof Error) {
+    const raw = error.message || '';
+    const normalized = raw.toLowerCase();
+    if (
+      normalized.includes('network request failed') ||
+      normalized.includes('failed to fetch') ||
+      normalized.includes('networkerror') ||
+      normalized.includes('load failed')
+    ) {
+      return 'Palvelimeen ei saatu yhteyttä. Tarkista verkkoyhteys ja yritä uudelleen.';
+    }
+    if (raw.trim()) return raw;
+  }
+  return fallback;
+};
 
 const getToken = async (): Promise<string | null> => {
   if (Platform.OS === 'web') {
@@ -74,10 +108,8 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     try {
       const savedToken = await getToken();
       if (savedToken) {
-        const response = await fetch(`${EXPO_PUBLIC_BACKEND_URL}/api/auth/me`, {
-          headers: {
-            'Authorization': `Bearer ${savedToken}`
-          }
+        const response = await fetch(apiUrl('/auth/me'), {
+          headers: buildApiHeaders(undefined, savedToken),
         });
 
         if (response.ok) {
@@ -86,11 +118,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
           setTokenState(savedToken);
         } else {
           await removeToken();
+          setTokenState(null);
+          setUser(null);
         }
       }
     } catch (error) {
       console.error('Error checking session:', error);
       await removeToken();
+      setTokenState(null);
+      setUser(null);
     } finally {
       setLoading(false);
     }
@@ -98,17 +134,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const login = async (email: string, password: string) => {
     try {
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_URL}/api/auth/login`, {
+      const response = await fetch(apiUrl('/auth/login'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ email, password })
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Login failed');
+        const message = await parseErrorMessage(response, 'Kirjautuminen epäonnistui');
+        throw new Error(message);
       }
 
       const data = await response.json();
@@ -117,23 +151,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(data.user);
     } catch (error) {
       console.error('Login error:', error);
-      throw error;
+      throw new Error(getFriendlyAuthErrorMessage(error, 'Kirjautuminen epäonnistui'));
     }
   };
 
   const register = async (email: string, password: string, username: string) => {
     try {
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_URL}/api/auth/register`, {
+      const response = await fetch(apiUrl('/auth/register'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ email, password, username })
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Registration failed');
+        const message = await parseErrorMessage(response, 'Rekisteröinti epäonnistui');
+        throw new Error(message);
       }
 
       const data = await response.json();
@@ -142,23 +174,21 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(data.user);
     } catch (error) {
       console.error('Registration error:', error);
-      throw error;
+      throw new Error(getFriendlyAuthErrorMessage(error, 'Rekisteröinti epäonnistui'));
     }
   };
 
   const loginWithGoogle = async (sessionId: string) => {
     try {
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_URL}/api/auth/google/session`, {
+      const response = await fetch(apiUrl('/auth/google/session'), {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
+        headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ session_id: sessionId })
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail || 'Google login failed');
+        const message = await parseErrorMessage(response, 'Google-kirjautuminen epäonnistui');
+        throw new Error(message);
       }
 
       const data = await response.json();
@@ -167,18 +197,16 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(data.user);
     } catch (error) {
       console.error('Google login error:', error);
-      throw error;
+      throw new Error(getFriendlyAuthErrorMessage(error, 'Google-kirjautuminen epäonnistui'));
     }
   };
 
   const logout = async () => {
     try {
       if (token) {
-        await fetch(`${EXPO_PUBLIC_BACKEND_URL}/api/auth/logout`, {
+        await fetch(apiUrl('/auth/logout'), {
           method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
+          headers: buildApiHeaders(undefined, token),
         });
       }
     } catch (error) {
@@ -191,9 +219,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const updateUser = (userData: Partial<User>) => {
-    if (user) {
-      setUser({ ...user, ...userData });
-    }
+    setUser((prevUser) => (prevUser ? { ...prevUser, ...userData } : prevUser));
   };
 
   return (

@@ -13,21 +13,41 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
+const API_BASE = `${EXPO_PUBLIC_BACKEND_URL.replace(/\/+$/, '').replace(/\/api$/, '')}/api`;
 
 export default function CreatePostScreen() {
   const [text, setText] = useState('');
   const [image, setImage] = useState<string | null>(null);
+  const [webImageFile, setWebImageFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const { token } = useAuth();
   const router = useRouter();
 
   const pickImage = async (useCamera: boolean) => {
     try {
+      if (Platform.OS === 'web') {
+        if (useCamera) {
+          Alert.alert('Huom', 'Webissä valitaan kuva tiedostosta.');
+        }
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.onchange = () => {
+          const file = input.files?.[0];
+          if (!file) return;
+          setWebImageFile(file);
+          setImage(URL.createObjectURL(file));
+        };
+        input.click();
+        return;
+      }
+
       let result;
       
       if (useCamera) {
@@ -42,7 +62,6 @@ export default function CreatePostScreen() {
           allowsEditing: true,
           aspect: [4, 3],
           quality: 0.7,
-          base64: true,
         });
       } else {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -56,12 +75,12 @@ export default function CreatePostScreen() {
           allowsEditing: true,
           aspect: [4, 3],
           quality: 0.7,
-          base64: true,
         });
       }
 
-      if (!result.canceled && result.assets[0].base64) {
-        setImage(`data:image/jpeg;base64,${result.assets[0].base64}`);
+      if (!result.canceled && result.assets && result.assets[0] && result.assets[0].uri) {
+        setWebImageFile(null);
+        setImage(result.assets[0].uri);
       }
     } catch (error) {
       console.error('Error picking image:', error);
@@ -74,29 +93,76 @@ export default function CreatePostScreen() {
       Alert.alert('Virhe', 'Lisää tekstiä tai kuva');
       return;
     }
+    if (!EXPO_PUBLIC_BACKEND_URL || !/^https?:\/\//i.test(EXPO_PUBLIC_BACKEND_URL)) {
+      Alert.alert('Virhe', 'Backend URL puuttuu tai on virheellinen (.env: EXPO_PUBLIC_BACKEND_URL)');
+      return;
+    }
 
     setLoading(true);
     try {
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_URL}/api/posts`, {
+      const formData = new FormData();
+      formData.append('text', text.trim());
+
+      if (image) {
+        if (Platform.OS === 'web' && webImageFile) {
+          formData.append('image', webImageFile, webImageFile.name || 'photo.jpg');
+        } else {
+        // Resize / compress the image before upload to avoid large payloads
+          let uploadUri = image;
+          try {
+            const MAX_WIDTH = 1280;
+            const compressQuality = 0.7;
+            const manipResult = await ImageManipulator.manipulateAsync(
+              image,
+              [{ resize: { width: MAX_WIDTH } }],
+              { compress: compressQuality, format: ImageManipulator.SaveFormat.JPEG }
+            );
+            if (manipResult && manipResult.uri) {
+              uploadUri = manipResult.uri;
+            }
+          } catch (err) {
+            console.warn('Image manipulation failed, uploading original image', err);
+          }
+
+          const uriParts = uploadUri.split('/');
+          let name = uriParts[uriParts.length - 1] || 'photo.jpg';
+          if (!name.match(/\.(jpg|jpeg|png)$/i)) {
+            name = `${name}.jpg`;
+          }
+          let type = 'image/jpeg';
+          if (name.toLowerCase().endsWith('.png')) type = 'image/png';
+
+          // @ts-ignore - React Native FormData file
+          formData.append('image', { uri: uploadUri, name, type });
+        }
+      }
+
+      const response = await fetch(`${API_BASE}/posts`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+          'X-Tunnel-Skip-Bypassing-Warning': 'true',
         },
-        body: JSON.stringify({
-          text: text.trim(),
-          image: image,
-        }),
+        body: formData,
       });
 
       if (response.ok) {
         Alert.alert('Onnistui!', 'Julkaisu luotu');
         setText('');
         setImage(null);
+        setWebImageFile(null);
         router.push('/(tabs)/feed');
       } else {
-        const error = await response.json();
-        Alert.alert('Virhe', error.detail || 'Julkaisun luonti epäonnistui');
+        const raw = await response.text();
+        let detail = 'Julkaisun luonti epäonnistui';
+        try {
+          const parsed = JSON.parse(raw);
+          detail = parsed?.detail || detail;
+        } catch {
+          if (raw) detail = `Palvelinvirhe (${response.status})`;
+        }
+        Alert.alert('Virhe', detail);
       }
     } catch (error) {
       console.error('Error creating post:', error);
@@ -151,7 +217,10 @@ export default function CreatePostScreen() {
               <Image source={{ uri: image }} style={styles.selectedImage} />
               <TouchableOpacity
                 style={styles.removeImageButton}
-                onPress={() => setImage(null)}
+                onPress={() => {
+                  setImage(null);
+                  setWebImageFile(null);
+                }}
               >
                 <Ionicons name="close-circle" size={32} color="#fff" />
               </TouchableOpacity>

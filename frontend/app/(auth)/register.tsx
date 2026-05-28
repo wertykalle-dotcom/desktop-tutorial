@@ -24,19 +24,23 @@ export default function RegisterScreen() {
   const router = useRouter();
 
   const handleRegister = async () => {
-    if (!email || !password || !username) {
+    const normalizedUsername = username.trim();
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPassword = password.trim();
+
+    if (!normalizedEmail || !normalizedPassword || !normalizedUsername) {
       Alert.alert('Virhe', 'Täytä kaikki kentät');
       return;
     }
 
-    if (password.length < 6) {
+    if (normalizedPassword.length < 6) {
       Alert.alert('Virhe', 'Salasanan tulee olla vähintään 6 merkkiä');
       return;
     }
 
     setLoading(true);
     try {
-      await register(email, password, username);
+      await register(normalizedEmail, normalizedPassword, normalizedUsername);
       router.replace('/(tabs)/feed');
     } catch (error: any) {
       Alert.alert('Rekisteröinti epäonnistui', error.message || 'Yritä uudelleen');

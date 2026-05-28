@@ -13,73 +13,30 @@ import {
 } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/contexts/AuthContext';
-import * as WebBrowser from 'expo-web-browser';
-import * as Linking from 'expo-linking';
 import { Ionicons } from '@expo/vector-icons';
-
-WebBrowser.maybeCompleteAuthSession();
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
-  const { login, loginWithGoogle } = useAuth();
+  const { login } = useAuth();
   const router = useRouter();
 
   const handleLogin = async () => {
-    if (!email || !password) {
+    const normalizedEmail = email.trim().toLowerCase();
+    const normalizedPassword = password.trim();
+
+    if (!normalizedEmail || !normalizedPassword) {
       Alert.alert('Virhe', 'Täytä kaikki kentät');
       return;
     }
 
     setLoading(true);
     try {
-      await login(email, password);
+      await login(normalizedEmail, normalizedPassword);
       router.replace('/(tabs)/feed');
     } catch (error: any) {
       Alert.alert('Kirjautuminen epäonnistui', error.message || 'Yritä uudelleen');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleGoogleLogin = async () => {
-    try {
-      let redirectUrl: string;
-      
-      if (Platform.OS === 'web') {
-        redirectUrl = window.location.origin + '/';
-      } else {
-        redirectUrl = Linking.createURL('auth');
-      }
-      
-      const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
-      
-      if (Platform.OS === 'web') {
-        window.location.href = authUrl;
-      } else {
-        const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
-        
-        if (result.type === 'success' && result.url) {
-          const url = new URL(result.url);
-          let sessionId = url.searchParams.get('session_id');
-          
-          if (!sessionId) {
-            const hash = url.hash.substring(1);
-            const params = new URLSearchParams(hash);
-            sessionId = params.get('session_id');
-          }
-          
-          if (sessionId) {
-            setLoading(true);
-            await loginWithGoogle(sessionId);
-            router.replace('/(tabs)/feed');
-          }
-        }
-      }
-    } catch (error: any) {
-      console.error('Google login error:', error);
-      Alert.alert('Kirjautuminen epäonnistui', 'Google-kirjautuminen epäonnistui');
     } finally {
       setLoading(false);
     }
@@ -136,21 +93,6 @@ export default function LoginScreen() {
             ) : (
               <Text style={styles.buttonText}>Kirjaudu sisään</Text>
             )}
-          </TouchableOpacity>
-
-          <View style={styles.divider}>
-            <View style={styles.dividerLine} />
-            <Text style={styles.dividerText}>tai</Text>
-            <View style={styles.dividerLine} />
-          </View>
-
-          <TouchableOpacity
-            style={[styles.button, styles.googleButton]}
-            onPress={handleGoogleLogin}
-            disabled={loading}
-          >
-            <Ionicons name="logo-google" size={20} color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.buttonText}>Jatka Googlella</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -222,9 +164,6 @@ const styles = StyleSheet.create({
   primaryButton: {
     backgroundColor: '#007AFF',
     marginTop: 8,
-  },
-  googleButton: {
-    backgroundColor: '#DB4437',
   },
   buttonText: {
     color: '#fff',

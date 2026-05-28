@@ -1,4 +1,4 @@
-import { Stack } from 'expo-router';
+import { Slot } from 'expo-router';
 import { AuthProvider } from '../src/contexts/AuthContext';
 import { useEffect } from 'react';
 import * as Font from 'expo-font';
@@ -18,18 +18,13 @@ export default function RootLayout() {
         console.warn('Error loading resources:', e);
       }
     }
-    
+
     loadResourcesAsync();
   }, []);
 
   return (
     <AuthProvider>
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="index" />
-        <Stack.Screen name="(auth)/login" />
-        <Stack.Screen name="(auth)/register" />
-        <Stack.Screen name="(tabs)" />
-      </Stack>
+      <Slot />
     </AuthProvider>
   );
 }

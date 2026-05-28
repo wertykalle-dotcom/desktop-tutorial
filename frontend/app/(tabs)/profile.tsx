@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -15,57 +15,116 @@ import {
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL;
+import { useFocusEffect, useRouter } from 'expo-router';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { useApiClient } from '../../src/hooks/useApiClient';
 
 export default function ProfileScreen() {
   const { user, token, logout, updateUser } = useAuth();
+  const { apiFetch } = useApiClient();
   const [editing, setEditing] = useState(false);
   const [username, setUsername] = useState(user?.username || '');
   const [bio, setBio] = useState(user?.bio || '');
   const [profilePicture, setProfilePicture] = useState(user?.profile_picture || '');
   const [loading, setLoading] = useState(false);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
+  const [stats, setStats] = useState({
+    posts_count: user?.posts_count || 0,
+    followers_count: user?.followers_count || 0,
+    following_count: user?.following_count || 0,
+  });
   const router = useRouter();
 
-  const pickImage = async () => {
+  useEffect(() => {
+    if (editing) return;
+    setUsername(user?.username || '');
+    setBio(user?.bio || '');
+    setProfilePicture(user?.profile_picture || '');
+    setStats({
+      posts_count: user?.posts_count || 0,
+      followers_count: user?.followers_count || 0,
+      following_count: user?.following_count || 0,
+    });
+  }, [user, editing]);
+
+  const refreshProfileStats = useCallback(async () => {
+    if (!token) return;
+    try {
+      const response = await apiFetch('/users/me');
+      if (!response || response.status === 401) return;
+      if (response.ok) {
+        const freshUser = await response.json();
+        setStats({
+          posts_count: freshUser?.posts_count || 0,
+          followers_count: freshUser?.followers_count || 0,
+          following_count: freshUser?.following_count || 0,
+        });
+        updateUser(freshUser);
+      }
+      const unreadResp = await apiFetch('/notifications/unread-count');
+      if (!unreadResp || unreadResp.status === 401) return;
+      if (unreadResp.ok) {
+        const payload = await unreadResp.json();
+        setUnreadNotifications(Number(payload?.unread_count || 0));
+      }
+    } catch (error) {
+      console.error('Error refreshing profile stats:', error);
+    }
+  }, [token, updateUser, apiFetch]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshProfileStats();
+    }, [refreshProfileStats])
+  );
+
+    const pickImage = async () => {
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+
       if (!permission.granted) {
         Alert.alert('Lupa vaaditaan', 'Gallerian käyttöoikeus vaaditaan');
         return;
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.5,
-        base64: true,
       });
 
-      if (!result.canceled && result.assets[0].base64) {
-        setProfilePicture(`data:image/jpeg;base64,${result.assets[0].base64}`);
+      if (!result.canceled && result.assets?.[0]?.uri) {
+        setLoading(true);
+
+        const manipulatedImage = await ImageManipulator.manipulateAsync(
+          result.assets[0].uri,
+          [{ resize: { width: 1000 } }],
+          { compress: 0.7, format: ImageManipulator.SaveFormat.JPEG }
+        );
+
+        setProfilePicture(manipulatedImage.uri);
       }
     } catch (error) {
       console.error('Error picking image:', error);
-      Alert.alert('Virhe', 'Kuvan valinta epäonnistui');
+      Alert.alert('Virhe', 'Kuvan valinta tai pienennys epäonnistui');
+    } finally {
+      setLoading(false);
     }
   };
 
   const handleSave = async () => {
-    if (!username.trim()) {
-      Alert.alert('Virhe', 'Käyttäjänimi vaaditaan');
-      return;
-    }
+  if (!username.trim()) {
+    Alert.alert('Virhe', 'Käyttäjänimi vaaditaan');
+    return;
+  }
 
-    setLoading(true);
-    try {
-      const response = await fetch(`${EXPO_PUBLIC_BACKEND_URL}/api/users/me`, {
+  setLoading(true);
+  try {
+    const response = await apiFetch('/users/me', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           username: username.trim(),
@@ -73,11 +132,17 @@ export default function ProfileScreen() {
           profile_picture: profilePicture || null,
         }),
       });
+      if (!response || response.status === 401) return;
 
       if (response.ok) {
         const updatedUser = await response.json();
         updateUser(updatedUser);
         setEditing(false);
+        setStats({
+          posts_count: updatedUser?.posts_count || stats.posts_count,
+          followers_count: updatedUser?.followers_count || stats.followers_count,
+          following_count: updatedUser?.following_count || stats.following_count,
+        });
         Alert.alert('Onnistui!', 'Profiili päivitetty');
       } else {
         const error = await response.json();
@@ -175,15 +240,15 @@ export default function ProfileScreen() {
 
           <View style={styles.statsContainer}>
             <View style={styles.stat}>
-              <Text style={styles.statNumber}>{user?.posts_count || 0}</Text>
+              <Text style={styles.statNumber}>{stats.posts_count}</Text>
               <Text style={styles.statLabel}>Julkaisut</Text>
             </View>
             <View style={styles.stat}>
-              <Text style={styles.statNumber}>{user?.followers_count || 0}</Text>
+              <Text style={styles.statNumber}>{stats.followers_count}</Text>
               <Text style={styles.statLabel}>Seuraajat</Text>
             </View>
             <View style={styles.stat}>
-              <Text style={styles.statNumber}>{user?.following_count || 0}</Text>
+              <Text style={styles.statNumber}>{stats.following_count}</Text>
               <Text style={styles.statLabel}>Seurattavat</Text>
             </View>
           </View>
@@ -226,6 +291,24 @@ export default function ProfileScreen() {
               >
                 <Ionicons name="log-out-outline" size={20} color="#FF3B30" />
                 <Text style={styles.logoutButtonText}>Kirjaudu ulos</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.editButton]}
+                onPress={() => router.push('/safety')}
+              >
+                <Ionicons name="shield-checkmark-outline" size={20} color="#007AFF" />
+                <Text style={styles.editButtonText}>Turvallisuusasetukset</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.button, styles.editButton]}
+                onPress={() => router.push('/notifications')}
+              >
+                <Ionicons name="notifications-outline" size={20} color="#007AFF" />
+                <Text style={styles.editButtonText}>
+                  Ilmoitukset {unreadNotifications > 0 ? `(${unreadNotifications})` : ''}
+                </Text>
               </TouchableOpacity>
             </>
           )}
@@ -358,11 +441,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f0f0',
   },
   editButtonText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#007AFF',
-    marginLeft: 8,
-  },
+  fontSize: 16,
+  fontWeight: '600',
+  color: '#007AFF',
+  marginLeft: 8,
+},
   logoutButton: {
     backgroundColor: '#fff',
     borderWidth: 1,
