@@ -1,8 +1,7 @@
-import { Tabs, Redirect } from 'expo-router';
+import { Tabs, Redirect, usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEffect, useState } from 'react';
-import { usePathname } from 'expo-router';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useApiClient } from '../../src/hooks/useApiClient';
@@ -13,18 +12,6 @@ export default function TabsLayout() {
   const { token, user, loading } = useAuth();
   const { apiFetch } = useApiClient();
   const [unreadCount, setUnreadCount] = useState(0);
-
-  if (loading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
-      </View>
-    );
-  }
-
-  if (!token || !user) {
-    return <Redirect href="/(auth)/login" />;
-  }
 
   useEffect(() => {
     const loadUnread = async () => {
@@ -50,6 +37,18 @@ export default function TabsLayout() {
     const intervalId = setInterval(loadUnread, 30000);
     return () => clearInterval(intervalId);
   }, [token, pathname, apiFetch]);
+
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+      </View>
+    );
+  }
+
+  if (!token || !user) {
+    return <Redirect href="/(auth)/login" />;
+  }
 
   return (
     <Tabs

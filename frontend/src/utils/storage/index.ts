@@ -87,4 +87,5 @@ export class Storage extends StorageBase {
 export const storage = new Storage();
 
 // Compile-time guard: any new method must be declared in storage-base.ts first.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 type _NoExtras = AssertNoExtras<Exclude<keyof Storage, keyof StorageBase>>;

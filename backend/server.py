@@ -162,6 +162,9 @@ def hash_password(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
 def get_sqlite_connection() -> sqlite3.Connection:
     if SQLITE_DB_PATH is None:
         raise RuntimeError("SQLite database is not configured")
@@ -351,7 +354,7 @@ def sqlite_toggle_like(post_id: str, user_id: str) -> Dict[str, Any]:
             is_liked = False
         else:
             like_id = f"like_{uuid.uuid4().hex[:12]}"
-            created_at = datetime.now(timezone.utc).isoformat()
+            created_at = utc_now().isoformat()
             cursor.execute(
                 "INSERT INTO likes (like_id, post_id, user_id, created_at) VALUES (?, ?, ?, ?)",
                 (like_id, post_id, user_id, created_at),
@@ -368,7 +371,7 @@ def sqlite_toggle_like(post_id: str, user_id: str) -> Dict[str, Any]:
 
 def create_sqlite_comment(post_id: str, user: Dict[str, Any], text: str) -> Dict[str, Any]:
     comment_id = f"comment_{uuid.uuid4().hex[:12]}"
-    created_at = datetime.now(timezone.utc).isoformat()
+    created_at = utc_now().isoformat()
     comment = {
         "comment_id": comment_id,
         "post_id": post_id,
@@ -749,7 +752,7 @@ async def register(user_data: UserRegister):
         "followers_count": 0,
         "following_count": 0,
         "posts_count": 0,
-        "created_at": datetime.now(timezone.utc)
+        "created_at": utc_now()
     }
 
     if db is not None:

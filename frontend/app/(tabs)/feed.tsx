@@ -17,6 +17,7 @@ import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import { useApiClient } from '../../src/hooks/useApiClient';
+import { formatRelativeTime, formatLocalDate } from '../../src/utils/time';
 
 const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 const BACKEND_BASE = EXPO_PUBLIC_BACKEND_URL.replace(/\/+$/, '').replace(/\/api$/, '');
@@ -143,7 +144,7 @@ export default function FeedScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [followingOnly, token, user?.user_id, apiFetch]);
+  }, [followingOnly, highlightPostId, token, user?.user_id, apiFetch]);
 
   useEffect(() => {
     fetchFeed();
@@ -153,7 +154,7 @@ export default function FeedScreen() {
     if (highlightPostId && followingOnly) {
       setFollowingOnly(false);
     }
-  }, [highlightPostId, followingOnly]);
+  }, [highlightPostId, followingOnly, setFollowingOnly]);
 
   useEffect(() => {
     if (!highlightPostId || !posts.some((post) => post.post_id === highlightPostId)) return;
@@ -552,7 +553,7 @@ export default function FeedScreen() {
           <View>
             <Text style={styles.username}>{item.username}</Text>
             <Text style={styles.timestamp}>
-              {new Date(item.created_at).toLocaleDateString('fi-FI')}
+              {formatRelativeTime(item.created_at) || formatLocalDate(item.created_at)}
             </Text>
           </View>
         </View>

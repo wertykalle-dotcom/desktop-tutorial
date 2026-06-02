@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/contexts/AuthContext';
 import { useApiClient } from '../src/hooks/useApiClient';
+import { formatRelativeTime, formatLocalDateTime } from '../src/utils/time';
 
 type NotificationItem = {
   notification_id: string;
@@ -117,13 +118,15 @@ export default function NotificationsScreen() {
           <Text style={styles.empty}>Ei ilmoituksia vielä</Text>
         ) : (
           items.map((item) => (
-            <TouchableOpacity
-              key={item.notification_id}
-              style={[styles.card, !item.is_read && styles.unreadCard]}
-              onPress={() => openNotification(item)}
-            >
+              <TouchableOpacity
+                key={item.notification_id}
+                style={[styles.card, !item.is_read && styles.unreadCard]}
+                onPress={() => openNotification(item)}
+              >
               <Text style={styles.message}>{renderMessage(item)}</Text>
-              <Text style={styles.date}>{new Date(item.created_at).toLocaleString()}</Text>
+              <Text style={styles.date}>
+                {formatRelativeTime(item.created_at) || formatLocalDateTime(item.created_at)}
+              </Text>
             </TouchableOpacity>
           ))
         )}

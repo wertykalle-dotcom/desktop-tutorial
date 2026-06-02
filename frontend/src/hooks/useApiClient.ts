@@ -25,7 +25,7 @@ export function useApiClient() {
       let response: Response;
       try {
         response = await fetch(apiUrl(path), { ...init, headers });
-      } catch (error) {
+      } catch {
         if (handleNetworkError && !hasHandledNetworkErrorRef.current) {
           hasHandledNetworkErrorRef.current = true;
           Alert.alert(

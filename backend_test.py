@@ -7,10 +7,11 @@ Tests all authentication, user, post, like, comment, and follow endpoints
 import requests
 import json
 import sys
+import os
 from typing import Dict, Optional
 
-# Backend URL from environment
-BACKEND_URL = "https://social-hub-1328.preview.emergentagent.com/api"
+# Backend URL from environment with a sane local fallback.
+BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000/api")
 
 # Test users
 TEST_USER_1 = {
@@ -37,6 +38,11 @@ test_comment_id = None
 tests_passed = 0
 tests_failed = 0
 failed_tests = []
+
+
+def tests_ready() -> bool:
+    """Return True when the auth/bootstrap steps have produced usable users."""
+    return bool(user1_token and user1_data and user2_token and user2_data)
 
 def print_section(title: str):
     """Print a section header"""
@@ -276,6 +282,9 @@ def test_update_profile():
 
 def test_get_user_profile():
     """Test GET /users/{user_id} endpoint"""
+    if not tests_ready():
+        print_test("GET /users/{user_id}", False, "Bootstrap data unavailable")
+        return False
     response = make_request("GET", f"/users/{user2_data.get('user_id')}", token=user1_token)
     
     if response and response.status_code == 200:
@@ -493,6 +502,9 @@ def test_verify_comment_count():
 
 def test_follow_user():
     """Test POST /users/{user_id}/follow endpoint"""
+    if not tests_ready():
+        print_test("POST /users/{user_id}/follow", False, "Bootstrap data unavailable")
+        return False
     response = make_request("POST", f"/users/{user1_data.get('user_id')}/follow", token=user2_token)
     
     if response and response.status_code == 200:
@@ -505,6 +517,9 @@ def test_follow_user():
 
 def test_check_following():
     """Test GET /users/{user_id}/is-following endpoint"""
+    if not tests_ready():
+        print_test("GET /users/{user_id}/is-following", False, "Bootstrap data unavailable")
+        return False
     response = make_request("GET", f"/users/{user1_data.get('user_id')}/is-following", token=user2_token)
     
     if response and response.status_code == 200:
@@ -522,6 +537,9 @@ def test_check_following():
 
 def test_verify_follower_counts():
     """Verify follower and following counts"""
+    if not tests_ready():
+        print_test("Verify Follower/Following Counts", False, "Bootstrap data unavailable")
+        return False
     # Check user 1's followers count
     response1 = make_request("GET", f"/users/{user1_data.get('user_id')}", token=user1_token)
     
@@ -551,6 +569,9 @@ def test_verify_follower_counts():
 
 def test_unfollow_user():
     """Test DELETE /users/{user_id}/follow endpoint"""
+    if not tests_ready():
+        print_test("DELETE /users/{user_id}/follow", False, "Bootstrap data unavailable")
+        return False
     response = make_request("DELETE", f"/users/{user1_data.get('user_id')}/follow", token=user2_token)
     
     if response and response.status_code == 200:
@@ -563,6 +584,9 @@ def test_unfollow_user():
 
 def test_verify_unfollow():
     """Verify that unfollow worked"""
+    if not tests_ready():
+        print_test("Verify Unfollow", False, "Bootstrap data unavailable")
+        return False
     response = make_request("GET", f"/users/{user1_data.get('user_id')}/is-following", token=user2_token)
     
     if response and response.status_code == 200:
@@ -580,6 +604,9 @@ def test_verify_unfollow():
 
 def test_cannot_follow_self():
     """Test that users cannot follow themselves"""
+    if not tests_ready():
+        print_test("Cannot Follow Self", False, "Bootstrap data unavailable")
+        return False
     response = make_request("POST", f"/users/{user1_data.get('user_id')}/follow", token=user1_token)
     
     if response and response.status_code == 400:
@@ -608,6 +635,17 @@ def run_all_tests():
     test_register_user2()
     test_get_me()
     test_unauthorized_access()
+
+    if not tests_ready():
+        print("\nBootstrap failed; skipping dependent API tests to avoid cascading errors.")
+        print_section("TEST SUMMARY")
+        total_tests = tests_passed + tests_failed
+        pass_rate = (tests_passed / total_tests * 100) if total_tests > 0 else 0
+        print(f"Total Tests: {total_tests}")
+        print(f"Passed: {tests_passed} ✅")
+        print(f"Failed: {tests_failed} ❌")
+        print(f"Pass Rate: {pass_rate:.1f}%")
+        return 1
     
     # User Profile Tests
     print_section("2. USER PROFILE TESTS")
