@@ -1,6 +1,22 @@
+const EXPO_PUBLIC_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || '';
 const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 
-export const API_BASE = `${EXPO_PUBLIC_BACKEND_URL.replace(/\/+$/, '').replace(/\/api$/, '')}/api`;
+const resolveBackendBaseUrl = () => {
+  const rawEnvUrl = EXPO_PUBLIC_API_BASE_URL || EXPO_PUBLIC_BACKEND_URL;
+  const envUrl = rawEnvUrl.replace(/\/+$/, '').replace(/\/api$/, '');
+  if (envUrl) return envUrl;
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    const host = window.location.hostname;
+    const codespacesPortHost = host.replace(/-\d+\.app\.github\.dev$/, '-8000.app.github.dev');
+    if (codespacesPortHost !== host) {
+      return `${window.location.protocol}//${codespacesPortHost}`;
+    }
+    return `${window.location.protocol}//${host}:8000`;
+  }
+  return 'http://127.0.0.1:8000';
+};
+
+export const API_BASE = `${resolveBackendBaseUrl()}/api`;
 
 export const buildApiHeaders = (
   initHeaders?: HeadersInit,
@@ -19,3 +35,18 @@ export const buildApiHeaders = (
 };
 
 export const apiUrl = (path: string): string => `${API_BASE}${path}`;
+
+export const extractApiErrorMessage = async (
+  response: Response,
+  fallbackMessage: string
+): Promise<string> => {
+  try {
+    const data = await response.json();
+    if (data?.error) return data.error;
+    if (data?.message) return data.message;
+    if (data?.detail) return data.detail;
+  } catch {
+    // JSON parse failed, fall through
+  }
+  return fallbackMessage;
+};

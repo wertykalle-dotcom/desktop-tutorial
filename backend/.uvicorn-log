@@ -1,0 +1,5 @@
+INFO:     Started server process [90]
+INFO:     Waiting for application startup.
+2026-06-02 23:52:34,827 - server - INFO - MongoDB is not configured; skipping MongoDB index creation.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)

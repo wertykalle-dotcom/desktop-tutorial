@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/contexts/AuthContext';
 import { useApiClient } from '../src/hooks/useApiClient';
+import { useI18n } from '../src/contexts/I18nContext';
 
 type UserMini = {
   user_id: string;
@@ -14,6 +15,7 @@ type UserMini = {
 export default function SafetyScreen() {
   const { token } = useAuth();
   const { apiFetch } = useApiClient();
+  const { t, isRTL } = useI18n();
   const router = useRouter();
   const [blockedUsers, setBlockedUsers] = useState<UserMini[]>([]);
   const [mutedUsers, setMutedUsers] = useState<UserMini[]>([]);
@@ -50,11 +52,11 @@ export default function SafetyScreen() {
       if (response.ok) {
         setBlockedUsers((prev) => prev.filter((u) => u.user_id !== targetUserId));
       } else {
-        Alert.alert('Virhe', 'Eston poisto epäonnistui');
+        Alert.alert(t('error'), t('unblockFailed'));
       }
     } catch (error) {
       console.error('Error unblocking user:', error);
-      Alert.alert('Virhe', 'Eston poisto epäonnistui');
+      Alert.alert(t('error'), t('unblockFailed'));
     }
   };
 
@@ -68,42 +70,42 @@ export default function SafetyScreen() {
       if (response.ok) {
         setMutedUsers((prev) => prev.filter((u) => u.user_id !== targetUserId));
       } else {
-        Alert.alert('Virhe', 'Hiljennyksen poisto epäonnistui');
+        Alert.alert(t('error'), t('unmuteFailed'));
       }
     } catch (error) {
       console.error('Error unmuting user:', error);
-      Alert.alert('Virhe', 'Hiljennyksen poisto epäonnistui');
+      Alert.alert(t('error'), t('unmuteFailed'));
     }
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={[styles.backButton, isRTL && styles.rowReverse]} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color="#007AFF" />
-          <Text style={styles.backText}>Takaisin</Text>
+          <Text style={[styles.backText, isRTL && styles.backTextRTL]}>{t('back')}</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Turvallisuusasetukset</Text>
+        <Text style={styles.title}>{t('safetyTitle')}</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Estetyt käyttäjät</Text>
+          <Text style={styles.sectionTitle}>{t('blockedUsers')}</Text>
           {blockedUsers.length === 0 ? (
-            <Text style={styles.empty}>Ei estettyjä käyttäjiä</Text>
+            <Text style={styles.empty}>{t('noBlockedUsers')}</Text>
           ) : (
             blockedUsers.map((u) => (
               <View key={`blocked-${u.user_id}`} style={styles.row}>
                 <Text style={styles.name}>@{u.username}</Text>
                 <TouchableOpacity
                   onPress={() =>
-                    Alert.alert('Poista esto', `Poistetaanko käyttäjän @${u.username} esto?`, [
-                      { text: 'Peruuta', style: 'cancel' },
-                      { text: 'Poista esto', onPress: () => unblockUser(u.user_id) },
+                    Alert.alert(t('confirmUnblock'), t('confirmUnblockBody').replace('{username}', u.username), [
+                      { text: t('cancel'), style: 'cancel' },
+                      { text: t('unblock'), onPress: () => unblockUser(u.user_id) },
                     ])
                   }
                 >
-                  <Text style={styles.action}>Poista esto</Text>
+                  <Text style={styles.action}>{t('unblock')}</Text>
                 </TouchableOpacity>
               </View>
             ))
@@ -111,22 +113,22 @@ export default function SafetyScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>Hiljennetyt käyttäjät</Text>
+          <Text style={styles.sectionTitle}>{t('mutedUsers')}</Text>
           {mutedUsers.length === 0 ? (
-            <Text style={styles.empty}>Ei hiljennettyjä käyttäjiä</Text>
+            <Text style={styles.empty}>{t('noMutedUsers')}</Text>
           ) : (
             mutedUsers.map((u) => (
               <View key={`muted-${u.user_id}`} style={styles.row}>
                 <Text style={styles.name}>@{u.username}</Text>
                 <TouchableOpacity
                   onPress={() =>
-                    Alert.alert('Poista hiljennys', `Poistetaanko käyttäjän @${u.username} hiljennys?`, [
-                      { text: 'Peruuta', style: 'cancel' },
-                      { text: 'Poista', onPress: () => unmuteUser(u.user_id) },
+                    Alert.alert(t('confirmUnmute'), t('confirmUnmuteBody').replace('{username}', u.username), [
+                      { text: t('cancel'), style: 'cancel' },
+                      { text: t('unmute'), onPress: () => unmuteUser(u.user_id) },
                     ])
                   }
                 >
-                  <Text style={styles.action}>Poista hiljennys</Text>
+                  <Text style={styles.action}>{t('unmute')}</Text>
                 </TouchableOpacity>
               </View>
             ))
@@ -154,10 +156,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 6,
   },
+  rowReverse: {
+    flexDirection: 'row-reverse',
+  },
   backText: {
     color: '#007AFF',
     fontWeight: '600',
     marginLeft: 6,
+  },
+  backTextRTL: {
+    marginLeft: 0,
+    marginRight: 6,
   },
   title: {
     fontSize: 20,

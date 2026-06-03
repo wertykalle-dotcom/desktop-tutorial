@@ -1,0 +1,16 @@
+.git
+.pytest_cache
+backend/.uvicorn-log
+backend/.uvicorn-pid
+backend/uploads
+backend/.secret_key
+backend/test.db
+frontend/node_modules
+frontend/.expo
+frontend/.metro
+frontend/dist
+frontend/web-build
+frontend/.turbo
+frontend/.cache
+node_modules
+dist

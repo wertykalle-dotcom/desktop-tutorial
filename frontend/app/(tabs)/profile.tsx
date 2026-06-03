@@ -19,7 +19,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { useApiClient } from '../../src/hooks/useApiClient';
+import { useI18n } from '../../src/contexts/I18nContext';
 import { extractApiErrorMessage } from '../../src/utils/api/http';
+import { localeLabels, SUPPORTED_LOCALES } from '../../src/i18n/locales';
 import {
   BIO_WARNING_THRESHOLD,
   MAX_BIO_LENGTH,
@@ -37,6 +39,7 @@ import {
 
 export default function ProfileScreen() {
   const { user, token, logout, updateUser } = useAuth();
+  const { locale, setLocale, isRTL, t } = useI18n();
   const { apiFetch } = useApiClient();
   const [editing, setEditing] = useState(false);
   const [username, setUsername] = useState(user?.username || '');
@@ -123,6 +126,12 @@ export default function ProfileScreen() {
   const isSaveDisabled =
     isBusy || !!usernameValidationMessage || !profileHasChanges;
   const saveHelperText = getSaveHelperText(usernameValidationMessage, profileHasChanges);
+  const isNewProfile = stats.posts_count < 3 && stats.followers_count === 0 && stats.following_count <= 2;
+  const hasCompleteProfile =
+    normalizedUsername.length >= 4 &&
+    normalizedBio.length > 0 &&
+    !!profilePicture &&
+    !usernameValidationMessage;
 
   const pickImage = async () => {
     try {
@@ -153,7 +162,7 @@ export default function ProfileScreen() {
       }
     } catch (error) {
       console.error('Error picking image:', error);
-      Alert.alert('Virhe', PROFILE_MESSAGES.imagePickFailed);
+      Alert.alert(t('error'), PROFILE_MESSAGES.imagePickFailed);
     } finally {
       setLoading(false);
     }
@@ -196,13 +205,13 @@ export default function ProfileScreen() {
   };
 
   const handleLogout = () => {
-    Alert.alert('Kirjaudu ulos', 'Haluatko varmasti kirjautua ulos?', [
+    Alert.alert(t('profileLogout'), t('profileLogout') + '?', [
       {
-        text: 'Peruuta',
+        text: t('cancel'),
         style: 'cancel',
       },
       {
-        text: 'Kirjaudu ulos',
+        text: t('profileLogout'),
         style: 'destructive',
         onPress: async () => {
           await logout();
@@ -221,6 +230,12 @@ export default function ProfileScreen() {
     setEditing(false);
   };
 
+  const handleLocaleChange = async (nextLocale: typeof locale) => {
+    await setLocale(nextLocale);
+  };
+
+  const rtlRowStyle = isRTL ? styles.rowReverse : undefined;
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -232,6 +247,54 @@ export default function ProfileScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
       >
         <View style={styles.header}>
+          {hasCompleteProfile ? (
+            <View style={[styles.personaBanner, styles.personaBannerComplete]}>
+              <Text style={[styles.personaEyebrow, isRTL && styles.textRight]}>{t('profileCompleteLabel')}</Text>
+              <Text style={[styles.personaTitle, isRTL && styles.textRight]}>{t('profileCompleteTitle')}</Text>
+              <Text style={[styles.personaBody, isRTL && styles.textRight]}>{t('profileCompleteBody')}</Text>
+            </View>
+          ) : (
+            <View style={[styles.personaBanner, isNewProfile ? styles.personaBannerExplore : styles.personaBannerPersonal]}>
+              <Text style={[styles.personaEyebrow, isRTL && styles.textRight]}>
+                {isNewProfile ? t('profileExploreModeLabel') : t('profilePersonalModeLabel')}
+              </Text>
+              <Text style={[styles.personaTitle, isRTL && styles.textRight]}>
+                {isNewProfile ? t('profileExploreModeTitle') : t('profilePersonalModeTitle')}
+              </Text>
+              <Text style={[styles.personaBody, isRTL && styles.textRight]}>
+                {isNewProfile ? t('profileExploreModeBody') : t('profilePersonalModeBody')}
+              </Text>
+              {isNewProfile ? (
+                <TouchableOpacity
+                  style={[styles.personaAction, isRTL && styles.rowReverse]}
+                  onPress={() => setEditing(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t('profileEdit')}
+                >
+                  <Ionicons name="create-outline" size={16} color="#007AFF" />
+                  <Text style={styles.personaActionText}>{t('profileCompleteNow')}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          )}
+          <View style={[styles.languageCard, isRTL && styles.languageCardRTL]}>
+            <Text style={[styles.languageLabel, isRTL && styles.textRight]}>{t('profileLanguage')}</Text>
+            <View style={styles.languagePills}>
+              {SUPPORTED_LOCALES.map((item) => (
+                <TouchableOpacity
+                  key={item}
+                  style={[styles.languagePill, locale === item && styles.languagePillActive]}
+                  onPress={() => handleLocaleChange(item)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: locale === item }}
+                >
+                  <Text style={[styles.languagePillText, locale === item && styles.languagePillTextActive]}>
+                    {localeLabels[item]}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          </View>
           {refreshError ? (
             <View style={styles.errorBanner}>
               <Ionicons name="alert-circle-outline" size={16} color="#B42318" />
@@ -247,7 +310,7 @@ export default function ProfileScreen() {
                 {refreshing ? (
                   <ActivityIndicator size="small" color="#B42318" />
                 ) : (
-                  <Text style={styles.retryButtonText}>Yritä uudelleen</Text>
+                  <Text style={styles.retryButtonText}>{t('retry')}</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -283,12 +346,12 @@ export default function ProfileScreen() {
 
           {editing ? (
             <View style={styles.editForm}>
-              <Text style={styles.label}>Käyttäjänimi</Text>
+              <Text style={[styles.label, isRTL && styles.textRight]}>{t('username')}</Text>
               <TextInput
                 style={styles.input}
                 value={username}
                 onChangeText={setUsername}
-                placeholder="Käyttäjänimi"
+                placeholder={t('username')}
                 autoCapitalize="none"
                 autoCorrect={false}
                 autoComplete="username"
@@ -302,12 +365,12 @@ export default function ProfileScreen() {
                 {username.length}/{MAX_USERNAME_LENGTH}
               </Text>
 
-              <Text style={styles.label}>Bio</Text>
+              <Text style={[styles.label, isRTL && styles.textRight]}>{t('profileBio')}</Text>
               <TextInput
                 style={[styles.input, styles.bioInput]}
                 value={bio}
                 onChangeText={setBio}
-                placeholder="Kerro itsestäsi..."
+                placeholder={t('feedWriteComment')}
                 multiline
                 autoCorrect={true}
                 textAlignVertical="top"
@@ -327,18 +390,18 @@ export default function ProfileScreen() {
             </View>
           )}
 
-          <View style={styles.statsContainer}>
+          <View style={[styles.statsContainer, rtlRowStyle]}>
             <View style={styles.stat}>
               <Text style={styles.statNumber}>{stats.posts_count}</Text>
-              <Text style={styles.statLabel}>Julkaisut</Text>
+              <Text style={styles.statLabel}>{t('profilePosts')}</Text>
             </View>
             <View style={styles.stat}>
               <Text style={styles.statNumber}>{stats.followers_count}</Text>
-              <Text style={styles.statLabel}>Seuraajat</Text>
+              <Text style={styles.statLabel}>{t('profileFollowers')}</Text>
             </View>
             <View style={styles.stat}>
               <Text style={styles.statNumber}>{stats.following_count}</Text>
-              <Text style={styles.statLabel}>Seurattavat</Text>
+              <Text style={styles.statLabel}>{t('profileFollowing')}</Text>
             </View>
           </View>
         </View>
@@ -346,9 +409,9 @@ export default function ProfileScreen() {
         <View style={styles.actions}>
           {editing ? (
             <>
-              <View style={styles.editActions}>
+              <View style={[styles.editActions, rtlRowStyle]}>
                 <TouchableOpacity style={[styles.button, styles.cancelButton]} onPress={cancelEdit}>
-                  <Text style={styles.cancelButtonText}>Peruuta</Text>
+                  <Text style={styles.cancelButtonText}>{t('cancel')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.button, styles.saveButton, isSaveDisabled && styles.buttonDisabled]}
@@ -358,7 +421,7 @@ export default function ProfileScreen() {
                   accessibilityLabel="Tallenna profiilin muutokset"
                   accessibilityHint="Lähettää muokatut profiilitiedot palvelimelle"
                 >
-                  {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Tallenna</Text>}
+                  {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t('profileSave')}</Text>}
                 </TouchableOpacity>
               </View>
               {saveHelperText ? <Text style={styles.saveHelperText}>{saveHelperText}</Text> : null}
@@ -374,7 +437,7 @@ export default function ProfileScreen() {
                 accessibilityHint="Avaa profiilin muokkauskentät"
               >
                 <Ionicons name="create-outline" size={20} color="#007AFF" />
-                <Text style={styles.editButtonText}>Muokkaa profiilia</Text>
+                <Text style={[styles.editButtonText, isRTL && styles.editButtonTextRTL]}>{t('profileEdit')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -386,7 +449,7 @@ export default function ProfileScreen() {
                 accessibilityHint="Kirjaa sinut ulos sovelluksesta"
               >
                 <Ionicons name="log-out-outline" size={20} color="#FF3B30" />
-                <Text style={styles.logoutButtonText}>Kirjaudu ulos</Text>
+                <Text style={[styles.logoutButtonText, isRTL && styles.logoutButtonTextRTL]}>{t('profileLogout')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -398,7 +461,7 @@ export default function ProfileScreen() {
                 accessibilityHint="Siirtyy turvallisuusasetusten näkymään"
               >
                 <Ionicons name="shield-checkmark-outline" size={20} color="#007AFF" />
-                <Text style={styles.editButtonText}>Turvallisuusasetukset</Text>
+                <Text style={[styles.editButtonText, isRTL && styles.editButtonTextRTL]}>{t('profileSafety')}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -410,7 +473,7 @@ export default function ProfileScreen() {
                 accessibilityHint="Siirtyy ilmoitusnäkymään"
               >
                 <Ionicons name="notifications-outline" size={20} color="#007AFF" />
-                <Text style={styles.editButtonText}>{formatNotificationsLabel(unreadNotifications)}</Text>
+                <Text style={[styles.editButtonText, isRTL && styles.editButtonTextRTL]}>{formatNotificationsLabel(unreadNotifications)}</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -422,7 +485,7 @@ export default function ProfileScreen() {
                 accessibilityHint="Siirtyy omiin luonnoksiin"
               >
                 <Ionicons name="document-text-outline" size={20} color="#007AFF" />
-                <Text style={styles.editButtonText}>Luonnokset</Text>
+                <Text style={[styles.editButtonText, isRTL && styles.editButtonTextRTL]}>{t('profileDrafts')}</Text>
               </TouchableOpacity>
             </>
           )}
@@ -444,6 +507,108 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 24,
     backgroundColor: '#f9f9f9',
+  },
+  languageCard: {
+    width: '100%',
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 16,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#EAECF0',
+  },
+  languageCardRTL: {
+    alignSelf: 'stretch',
+  },
+  personaBanner: {
+    width: '100%',
+    marginBottom: 16,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+  },
+  personaBannerExplore: {
+    backgroundColor: '#F7FBFF',
+    borderColor: '#CFE4FF',
+  },
+  personaBannerPersonal: {
+    backgroundColor: '#F5F9F4',
+    borderColor: '#D6E8D1',
+  },
+  personaBannerComplete: {
+    backgroundColor: '#ECFDF3',
+    borderColor: '#A6F4C5',
+  },
+  personaEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: '#60708A',
+    marginBottom: 4,
+  },
+  personaTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#16233A',
+    marginBottom: 4,
+  },
+  personaBody: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#3F4B63',
+    marginBottom: 10,
+  },
+  personaAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#CFE4FF',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  personaActionText: {
+    color: '#007AFF',
+    fontWeight: '700',
+    fontSize: 13,
+  },
+  languageLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 10,
+    color: '#101828',
+  },
+  textRight: {
+    textAlign: 'right',
+  },
+  languagePills: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  languagePill: {
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    backgroundColor: '#F2F4F7',
+    borderWidth: 1,
+    borderColor: '#EAECF0',
+  },
+  languagePillActive: {
+    backgroundColor: '#101828',
+    borderColor: '#101828',
+  },
+  languagePillText: {
+    fontSize: 13,
+    color: '#344054',
+    fontWeight: '600',
+  },
+  languagePillTextActive: {
+    color: '#fff',
   },
   errorBanner: {
     width: '100%',
@@ -589,6 +754,13 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: '#e0e0e0',
   },
+  rowReverse: {
+    flexDirection: 'row-reverse',
+  },
+  rowReverseWrap: {
+    flexDirection: 'row-reverse',
+    flexWrap: 'wrap',
+  },
   stat: {
     alignItems: 'center',
   },
@@ -625,6 +797,10 @@ const styles = StyleSheet.create({
     color: '#007AFF',
     marginLeft: 8,
   },
+  editButtonTextRTL: {
+    marginLeft: 0,
+    marginRight: 8,
+  },
   logoutButton: {
     backgroundColor: '#fff',
     borderWidth: 1,
@@ -635,6 +811,10 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#FF3B30',
     marginLeft: 8,
+  },
+  logoutButtonTextRTL: {
+    marginLeft: 0,
+    marginRight: 8,
   },
   editActions: {
     flexDirection: 'row',

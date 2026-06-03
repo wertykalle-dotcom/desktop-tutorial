@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/contexts/AuthContext';
 import { useApiClient } from '../src/hooks/useApiClient';
 import { formatRelativeTime, formatLocalDateTime } from '../src/utils/time';
+import { useI18n } from '../src/contexts/I18nContext';
 
 type NotificationItem = {
   notification_id: string;
@@ -15,12 +16,14 @@ type NotificationItem = {
   is_read?: boolean;
 };
 
-export default function NotificationsScreen() {
-  const { token } = useAuth();
+function NotificationsScreen() {
+  const { token, user } = useAuth();
   const { apiFetch } = useApiClient();
+  const { t, isRTL } = useI18n();
   const router = useRouter();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const isNewAccount = (user?.posts_count ?? 0) < 3 && (user?.followers_count ?? 0) === 0 && (user?.following_count ?? 0) <= 2;
 
   const loadNotifications = useCallback(async () => {
     if (!token) {
@@ -36,15 +39,15 @@ export default function NotificationsScreen() {
         setItems(Array.isArray(data) ? data : []);
       } else {
         setItems([]);
-        Alert.alert('Virhe', 'Ilmoitusten lataus epäonnistui');
+        Alert.alert(t('error'), t('notificationsLoadFailed'));
       }
     } catch (error) {
       console.error('Error loading notifications:', error);
-      Alert.alert('Virhe', 'Ilmoitusten lataus epäonnistui');
+      Alert.alert(t('error'), t('notificationsLoadFailed'));
     } finally {
       setLoading(false);
     }
-  }, [token, apiFetch]);
+  }, [token, apiFetch, t]);
 
   useFocusEffect(
     useCallback(() => {
@@ -90,32 +93,43 @@ export default function NotificationsScreen() {
       if (response.ok) {
         setItems((prev) => prev.map((n) => ({ ...n, is_read: true })));
       } else {
-        Alert.alert('Virhe', 'Ilmoitusten merkintä epäonnistui');
+        Alert.alert(t('error'), t('notificationsMarkReadFailed'));
       }
     } catch (error) {
       console.error('Error marking all notifications as read:', error);
-      Alert.alert('Virhe', 'Ilmoitusten merkintä epäonnistui');
+      Alert.alert(t('error'), t('notificationsMarkReadFailed'));
     }
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
+        <TouchableOpacity style={[styles.backButton, isRTL && styles.rowReverse]} onPress={() => router.back()}>
           <Ionicons name="arrow-back" size={22} color="#007AFF" />
-          <Text style={styles.backText}>Takaisin</Text>
+          <Text style={[styles.backText, isRTL && styles.backTextRTL]}>{t('back')}</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Ilmoitukset</Text>
+        <Text style={styles.title}>{t('notificationsTitle')}</Text>
         <TouchableOpacity style={styles.readAllButton} onPress={markAllAsRead}>
-          <Text style={styles.readAllText}>Merkitse kaikki luetuiksi</Text>
+          <Text style={styles.readAllText}>{t('markAllRead')}</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView contentContainerStyle={styles.content}>
+        <View style={[styles.personaCard, isNewAccount ? styles.personaCardExplore : styles.personaCardPersonal]}>
+          <Text style={styles.personaLabel}>
+            {isNewAccount ? t('notificationsExploreModeLabel') : t('notificationsPersonalModeLabel')}
+          </Text>
+          <Text style={styles.personaTitle}>
+            {isNewAccount ? t('notificationsExploreModeTitle') : t('notificationsPersonalModeTitle')}
+          </Text>
+          <Text style={styles.personaBody}>
+            {isNewAccount ? t('notificationsExploreModeBody') : t('notificationsPersonalModeBody')}
+          </Text>
+        </View>
         {loading ? (
           <ActivityIndicator size="small" color="#007AFF" />
         ) : items.length === 0 ? (
-          <Text style={styles.empty}>Ei ilmoituksia vielä</Text>
+          <Text style={styles.empty}>{t('noNotifications')}</Text>
         ) : (
           items.map((item) => (
               <TouchableOpacity
@@ -135,6 +149,8 @@ export default function NotificationsScreen() {
   );
 }
 
+export default NotificationsScreen;
+
 const styles = StyleSheet.create({
   container: {
     flex: 1,
@@ -152,10 +168,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 6,
   },
+  rowReverse: {
+    flexDirection: 'row-reverse',
+  },
   backText: {
     color: '#007AFF',
     fontWeight: '600',
     marginLeft: 6,
+  },
+  backTextRTL: {
+    marginLeft: 0,
+    marginRight: 6,
   },
   title: {
     fontSize: 20,
@@ -174,6 +197,38 @@ const styles = StyleSheet.create({
   content: {
     padding: 16,
     gap: 10,
+  },
+  personaCard: {
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: 16,
+  },
+  personaCardExplore: {
+    backgroundColor: '#F7FBFF',
+    borderColor: '#CFE4FF',
+  },
+  personaCardPersonal: {
+    backgroundColor: '#F5F9F4',
+    borderColor: '#D6E8D1',
+  },
+  personaLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: '#60708A',
+    marginBottom: 4,
+  },
+  personaTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#16233A',
+    marginBottom: 4,
+  },
+  personaBody: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: '#3F4B63',
   },
   empty: {
     fontSize: 14,

@@ -8,10 +8,16 @@ import requests
 import json
 import sys
 import os
+import warnings
 from typing import Dict, Optional
 
 # Backend URL from environment with a sane local fallback.
 BACKEND_URL = os.environ.get("BACKEND_URL", "http://127.0.0.1:8000/api")
+
+warnings.filterwarnings("ignore", category=PendingDeprecationWarning, module="starlette.formparsers")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="passlib.utils")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="fastapi.applications")
+warnings.filterwarnings("ignore", category=DeprecationWarning, message=".*on_event is deprecated.*")
 
 # Test users
 TEST_USER_1 = {
@@ -40,7 +46,7 @@ tests_failed = 0
 failed_tests = []
 
 
-def tests_ready() -> bool:
+def is_bootstrap_ready() -> bool:
     """Return True when the auth/bootstrap steps have produced usable users."""
     return bool(user1_token and user1_data and user2_token and user2_data)
 
@@ -108,10 +114,10 @@ def test_register_user1():
             user1_token = data["token"]
             user1_data = data["user"]
             print_test("Register User 1", True, f"User ID: {user1_data.get('user_id')}")
-            return True
+            return
         else:
             print_test("Register User 1", False, "Missing token or user in response")
-            return False
+            return
     elif response and response.status_code == 400:
         # User might already exist, try to login
         print(f"     ℹ️  User already exists, will try login")
@@ -119,7 +125,7 @@ def test_register_user1():
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("Register User 1", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_register_user2():
     """Test user registration for user 2"""
@@ -133,10 +139,10 @@ def test_register_user2():
             user2_token = data["token"]
             user2_data = data["user"]
             print_test("Register User 2", True, f"User ID: {user2_data.get('user_id')}")
-            return True
+            return
         else:
             print_test("Register User 2", False, "Missing token or user in response")
-            return False
+            return
     elif response and response.status_code == 400:
         # User might already exist, try to login
         print(f"     ℹ️  User already exists, will try login")
@@ -144,7 +150,7 @@ def test_register_user2():
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("Register User 2", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_login_user1():
     """Test user login for user 1"""
@@ -161,14 +167,14 @@ def test_login_user1():
             user1_token = data["token"]
             user1_data = data["user"]
             print_test("Login User 1", True, f"Token received")
-            return True
+            return
         else:
             print_test("Login User 1", False, "Missing token or user in response")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("Login User 1", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_login_user2():
     """Test user login for user 2"""
@@ -185,14 +191,14 @@ def test_login_user2():
             user2_token = data["token"]
             user2_data = data["user"]
             print_test("Login User 2", True, f"Token received")
-            return True
+            return
         else:
             print_test("Login User 2", False, "Missing token or user in response")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("Login User 2", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_get_me():
     """Test GET /auth/me endpoint"""
@@ -202,14 +208,14 @@ def test_get_me():
         data = response.json()
         if data.get("user_id") == user1_data.get("user_id"):
             print_test("GET /auth/me", True, f"User: {data.get('username')}")
-            return True
+            return
         else:
             print_test("GET /auth/me", False, "User ID mismatch")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("GET /auth/me", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_logout():
     """Test POST /auth/logout endpoint"""
@@ -217,11 +223,11 @@ def test_logout():
     
     if response and response.status_code == 200:
         print_test("POST /auth/logout", True, "Logged out successfully")
-        return True
+        return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("POST /auth/logout", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_unauthorized_access():
     """Test that endpoints reject unauthorized requests"""
@@ -229,10 +235,10 @@ def test_unauthorized_access():
     
     if response and response.status_code == 401:
         print_test("Unauthorized Access Protection", True, "Correctly rejected")
-        return True
+        return
     else:
         print_test("Unauthorized Access Protection", False, f"Expected 401, got {response.status_code if response else 'N/A'}")
-        return False
+        return
 
 # =======================
 # USER PROFILE TESTS
@@ -246,14 +252,14 @@ def test_get_my_profile():
         data = response.json()
         if "user_id" in data and "username" in data:
             print_test("GET /users/me", True, f"Username: {data.get('username')}")
-            return True
+            return
         else:
             print_test("GET /users/me", False, "Missing required fields")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("GET /users/me", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_update_profile():
     """Test PUT /users/me endpoint"""
@@ -271,34 +277,34 @@ def test_update_profile():
             # Update local user data
             user1_data["username"] = update_data["username"]
             user1_data["bio"] = update_data["bio"]
-            return True
+            return
         else:
             print_test("PUT /users/me", False, "Update not reflected in response")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("PUT /users/me", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_get_user_profile():
     """Test GET /users/{user_id} endpoint"""
-    if not tests_ready():
+    if not is_bootstrap_ready():
         print_test("GET /users/{user_id}", False, "Bootstrap data unavailable")
-        return False
+        return
     response = make_request("GET", f"/users/{user2_data.get('user_id')}", token=user1_token)
     
     if response and response.status_code == 200:
         data = response.json()
         if data.get("user_id") == user2_data.get("user_id"):
             print_test("GET /users/{user_id}", True, f"Retrieved user: {data.get('username')}")
-            return True
+            return
         else:
             print_test("GET /users/{user_id}", False, "User ID mismatch")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("GET /users/{user_id}", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 # =======================
 # POST TESTS
@@ -320,14 +326,14 @@ def test_create_post():
         if "post_id" in data and data.get("text") == post_data["text"]:
             test_post_id = data["post_id"]
             print_test("POST /posts", True, f"Post ID: {test_post_id}")
-            return True
+            return
         else:
             print_test("POST /posts", False, "Missing post_id or text mismatch")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("POST /posts", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_get_feed():
     """Test GET /posts endpoint (feed)"""
@@ -337,20 +343,20 @@ def test_get_feed():
         data = response.json()
         if isinstance(data, list):
             print_test("GET /posts (feed)", True, f"Retrieved {len(data)} posts")
-            return True
+            return
         else:
             print_test("GET /posts (feed)", False, "Response is not a list")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("GET /posts (feed)", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_get_single_post():
     """Test GET /posts/{post_id} endpoint"""
     if not test_post_id:
         print_test("GET /posts/{post_id}", False, "No test post ID available")
-        return False
+        return
     
     response = make_request("GET", f"/posts/{test_post_id}", token=user1_token)
     
@@ -358,14 +364,14 @@ def test_get_single_post():
         data = response.json()
         if data.get("post_id") == test_post_id:
             print_test("GET /posts/{post_id}", True, f"Retrieved post")
-            return True
+            return
         else:
             print_test("GET /posts/{post_id}", False, "Post ID mismatch")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("GET /posts/{post_id}", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 # =======================
 # LIKE TESTS
@@ -375,23 +381,23 @@ def test_like_post():
     """Test POST /posts/{post_id}/like endpoint"""
     if not test_post_id:
         print_test("POST /posts/{post_id}/like", False, "No test post ID available")
-        return False
+        return
     
     response = make_request("POST", f"/posts/{test_post_id}/like", token=user2_token)
     
     if response and response.status_code == 200:
         print_test("POST /posts/{post_id}/like", True, "Post liked by user 2")
-        return True
+        return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("POST /posts/{post_id}/like", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_verify_like_count():
     """Verify that like count increased"""
     if not test_post_id:
         print_test("Verify Like Count", False, "No test post ID available")
-        return False
+        return
     
     response = make_request("GET", f"/posts/{test_post_id}", token=user1_token)
     
@@ -399,29 +405,29 @@ def test_verify_like_count():
         data = response.json()
         if data.get("likes_count", 0) >= 1:
             print_test("Verify Like Count", True, f"Likes: {data.get('likes_count')}")
-            return True
+            return
         else:
             print_test("Verify Like Count", False, f"Expected >= 1, got {data.get('likes_count')}")
-            return False
+            return
     else:
         print_test("Verify Like Count", False, "Failed to retrieve post")
-        return False
+        return
 
 def test_unlike_post():
     """Test DELETE /posts/{post_id}/like endpoint"""
     if not test_post_id:
         print_test("DELETE /posts/{post_id}/like", False, "No test post ID available")
-        return False
+        return
     
     response = make_request("DELETE", f"/posts/{test_post_id}/like", token=user2_token)
     
     if response and response.status_code == 200:
         print_test("DELETE /posts/{post_id}/like", True, "Post unliked by user 2")
-        return True
+        return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("DELETE /posts/{post_id}/like", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 # =======================
 # COMMENT TESTS
@@ -433,7 +439,7 @@ def test_create_comment():
     
     if not test_post_id:
         print_test("POST /posts/{post_id}/comments", False, "No test post ID available")
-        return False
+        return
     
     comment_data = {
         "text": "Great post! This is a test comment from user 2."
@@ -446,20 +452,20 @@ def test_create_comment():
         if "comment_id" in data and data.get("text") == comment_data["text"]:
             test_comment_id = data["comment_id"]
             print_test("POST /posts/{post_id}/comments", True, f"Comment ID: {test_comment_id}")
-            return True
+            return
         else:
             print_test("POST /posts/{post_id}/comments", False, "Missing comment_id or text mismatch")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("POST /posts/{post_id}/comments", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_get_comments():
     """Test GET /posts/{post_id}/comments endpoint"""
     if not test_post_id:
         print_test("GET /posts/{post_id}/comments", False, "No test post ID available")
-        return False
+        return
     
     response = make_request("GET", f"/posts/{test_post_id}/comments", token=user1_token)
     
@@ -467,20 +473,20 @@ def test_get_comments():
         data = response.json()
         if isinstance(data, list) and len(data) >= 1:
             print_test("GET /posts/{post_id}/comments", True, f"Retrieved {len(data)} comments")
-            return True
+            return
         else:
             print_test("GET /posts/{post_id}/comments", False, f"Expected list with >= 1 comment, got {len(data) if isinstance(data, list) else 'not a list'}")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("GET /posts/{post_id}/comments", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_verify_comment_count():
     """Verify that comment count increased"""
     if not test_post_id:
         print_test("Verify Comment Count", False, "No test post ID available")
-        return False
+        return
     
     response = make_request("GET", f"/posts/{test_post_id}", token=user1_token)
     
@@ -488,13 +494,13 @@ def test_verify_comment_count():
         data = response.json()
         if data.get("comments_count", 0) >= 1:
             print_test("Verify Comment Count", True, f"Comments: {data.get('comments_count')}")
-            return True
+            return
         else:
             print_test("Verify Comment Count", False, f"Expected >= 1, got {data.get('comments_count')}")
-            return False
+            return
     else:
         print_test("Verify Comment Count", False, "Failed to retrieve post")
-        return False
+        return
 
 # =======================
 # FOLLOW TESTS
@@ -502,44 +508,44 @@ def test_verify_comment_count():
 
 def test_follow_user():
     """Test POST /users/{user_id}/follow endpoint"""
-    if not tests_ready():
+    if not is_bootstrap_ready():
         print_test("POST /users/{user_id}/follow", False, "Bootstrap data unavailable")
-        return False
+        return
     response = make_request("POST", f"/users/{user1_data.get('user_id')}/follow", token=user2_token)
     
     if response and response.status_code == 200:
         print_test("POST /users/{user_id}/follow", True, "User 2 followed User 1")
-        return True
+        return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("POST /users/{user_id}/follow", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_check_following():
     """Test GET /users/{user_id}/is-following endpoint"""
-    if not tests_ready():
+    if not is_bootstrap_ready():
         print_test("GET /users/{user_id}/is-following", False, "Bootstrap data unavailable")
-        return False
+        return
     response = make_request("GET", f"/users/{user1_data.get('user_id')}/is-following", token=user2_token)
     
     if response and response.status_code == 200:
         data = response.json()
         if data.get("is_following") == True:
             print_test("GET /users/{user_id}/is-following", True, "Following status confirmed")
-            return True
+            return
         else:
             print_test("GET /users/{user_id}/is-following", False, f"Expected is_following=True, got {data.get('is_following')}")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("GET /users/{user_id}/is-following", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_verify_follower_counts():
     """Verify follower and following counts"""
-    if not tests_ready():
+    if not is_bootstrap_ready():
         print_test("Verify Follower/Following Counts", False, "Bootstrap data unavailable")
-        return False
+        return
     # Check user 1's followers count
     response1 = make_request("GET", f"/users/{user1_data.get('user_id')}", token=user1_token)
     
@@ -556,65 +562,65 @@ def test_verify_follower_counts():
             
             if followers >= 1 and following >= 1:
                 print_test("Verify Follower/Following Counts", True, f"User1 followers: {followers}, User2 following: {following}")
-                return True
+                return
             else:
                 print_test("Verify Follower/Following Counts", False, f"Expected >= 1 for both, got followers={followers}, following={following}")
-                return False
+                return
         else:
             print_test("Verify Follower/Following Counts", False, "Failed to get user 2 profile")
-            return False
+            return
     else:
         print_test("Verify Follower/Following Counts", False, "Failed to get user 1 profile")
-        return False
+        return
 
 def test_unfollow_user():
     """Test DELETE /users/{user_id}/follow endpoint"""
-    if not tests_ready():
+    if not is_bootstrap_ready():
         print_test("DELETE /users/{user_id}/follow", False, "Bootstrap data unavailable")
-        return False
+        return
     response = make_request("DELETE", f"/users/{user1_data.get('user_id')}/follow", token=user2_token)
     
     if response and response.status_code == 200:
         print_test("DELETE /users/{user_id}/follow", True, "User 2 unfollowed User 1")
-        return True
+        return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("DELETE /users/{user_id}/follow", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_verify_unfollow():
     """Verify that unfollow worked"""
-    if not tests_ready():
+    if not is_bootstrap_ready():
         print_test("Verify Unfollow", False, "Bootstrap data unavailable")
-        return False
+        return
     response = make_request("GET", f"/users/{user1_data.get('user_id')}/is-following", token=user2_token)
     
     if response and response.status_code == 200:
         data = response.json()
         if data.get("is_following") == False:
             print_test("Verify Unfollow", True, "Not following anymore")
-            return True
+            return
         else:
             print_test("Verify Unfollow", False, f"Expected is_following=False, got {data.get('is_following')}")
-            return False
+            return
     else:
         error = response.json().get("detail") if response else "No response"
         print_test("Verify Unfollow", False, f"Status: {response.status_code if response else 'N/A'}, Error: {error}")
-        return False
+        return
 
 def test_cannot_follow_self():
     """Test that users cannot follow themselves"""
-    if not tests_ready():
+    if not is_bootstrap_ready():
         print_test("Cannot Follow Self", False, "Bootstrap data unavailable")
-        return False
+        return
     response = make_request("POST", f"/users/{user1_data.get('user_id')}/follow", token=user1_token)
     
     if response and response.status_code == 400:
         print_test("Cannot Follow Self", True, "Correctly rejected")
-        return True
+        return
     else:
         print_test("Cannot Follow Self", False, f"Expected 400, got {response.status_code if response else 'N/A'}")
-        return False
+        return
 
 # =======================
 # MAIN TEST RUNNER
@@ -636,7 +642,7 @@ def run_all_tests():
     test_get_me()
     test_unauthorized_access()
 
-    if not tests_ready():
+    if not is_bootstrap_ready():
         print("\nBootstrap failed; skipping dependent API tests to avoid cascading errors.")
         print_section("TEST SUMMARY")
         total_tests = tests_passed + tests_failed

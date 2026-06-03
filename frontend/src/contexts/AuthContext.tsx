@@ -12,6 +12,8 @@ interface User {
   followers_count: number;
   following_count: number;
   posts_count: number;
+  role?: 'Super Admin' | 'Moderator' | 'User';
+  banned_until?: string | null;
 }
 
 interface AuthContextType {

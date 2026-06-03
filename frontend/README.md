@@ -1,50 +1,36 @@
-# Welcome to your Expo app 👋
+# Frontend
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+Expo app for the social-style UI.
 
-## Get started
+## What is in place
 
-1. Install dependencies
+- locale detection and locale persistence
+- localized auth, feed, profile, notifications, safety, create, and admin screens
+- RTL-aware layout adjustments for the main flows
+- feed ads rendering
+- Jest test setup for offline execution
 
-   ```bash
-   npm install
-   ```
+## Status
 
-2. Start the app
+| Area | Status | Notes |
+| --- | --- | --- |
+| Locale detection and persistence | Done | Locale is detected, stored, and reused across sessions. |
+| RTL behavior | Mostly done | Main flows are RTL-aware and several screens are mirrored. |
+| Feed ranking | Done | Dwell and interest signals influence feed ordering. |
+| Onboarding | Done | New users are routed through a localized onboarding flow. |
+| Moderation UI | Done | Admin and safety screens expose the moderation controls. |
+| Ads rendering | Done | In-feed ad placement is wired into the feed. |
+| Offline tests | Done | Jest runs locally without needing network access. |
 
-   ```bash
-   npx expo start
-   ```
-
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Run
 
 ```bash
-npm run reset-project
+npm install
+npx expo start
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Test
 
-## Learn more
-
-To learn more about developing your project with Expo, look at the following resources:
-
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```bash
+npm test -- --runInBand
+```

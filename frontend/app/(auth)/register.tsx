@@ -14,6 +14,7 @@ import {
 import { useRouter } from 'expo-router';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
+import { useI18n } from '../../src/contexts/I18nContext';
 
 export default function RegisterScreen() {
   const [email, setEmail] = useState('');
@@ -21,6 +22,7 @@ export default function RegisterScreen() {
   const [username, setUsername] = useState('');
   const [loading, setLoading] = useState(false);
   const { register } = useAuth();
+  const { t, isRTL } = useI18n();
   const router = useRouter();
 
   const handleRegister = async () => {
@@ -29,12 +31,12 @@ export default function RegisterScreen() {
     const normalizedPassword = password.trim();
 
     if (!normalizedEmail || !normalizedPassword || !normalizedUsername) {
-      Alert.alert('Virhe', 'Täytä kaikki kentät');
+      Alert.alert(t('error'), t('requiredFields'));
       return;
     }
 
     if (normalizedPassword.length < 6) {
-      Alert.alert('Virhe', 'Salasanan tulee olla vähintään 6 merkkiä');
+      Alert.alert(t('error'), t('passwordMin'));
       return;
     }
 
@@ -43,7 +45,7 @@ export default function RegisterScreen() {
       await register(normalizedEmail, normalizedPassword, normalizedUsername);
       router.replace('/(tabs)/feed');
     } catch (error: any) {
-      Alert.alert('Rekisteröinti epäonnistui', error.message || 'Yritä uudelleen');
+      Alert.alert(t('registerFailed'), error.message || t('retry'));
     } finally {
       setLoading(false);
     }
@@ -60,27 +62,27 @@ export default function RegisterScreen() {
       >
         <View style={styles.header}>
           <Ionicons name="person-add-outline" size={80} color="#007AFF" />
-          <Text style={styles.title}>Luo uusi tili</Text>
-          <Text style={styles.subtitle}>Liity yhteisöön tänään</Text>
+          <Text style={styles.title}>{t('createAccount')}</Text>
+          <Text style={[styles.subtitle, isRTL && styles.subtitleRTL]}>{t('joinToday')}</Text>
         </View>
 
         <View style={styles.form}>
-          <View style={styles.inputContainer}>
-            <Ionicons name="person-outline" size={20} color="#666" style={styles.inputIcon} />
+          <View style={[styles.inputContainer, isRTL && styles.rowReverse]}>
+            <Ionicons name="person-outline" size={20} color="#666" style={[styles.inputIcon, isRTL && styles.inputIconRTL]} />
             <TextInput
               style={styles.input}
-              placeholder="Käyttäjänimi"
+              placeholder={t('username')}
               value={username}
               onChangeText={setUsername}
               autoCapitalize="none"
             />
           </View>
 
-          <View style={styles.inputContainer}>
-            <Ionicons name="mail-outline" size={20} color="#666" style={styles.inputIcon} />
+          <View style={[styles.inputContainer, isRTL && styles.rowReverse]}>
+            <Ionicons name="mail-outline" size={20} color="#666" style={[styles.inputIcon, isRTL && styles.inputIconRTL]} />
             <TextInput
               style={styles.input}
-              placeholder="Sähköposti"
+              placeholder={t('email')}
               value={email}
               onChangeText={setEmail}
               keyboardType="email-address"
@@ -89,11 +91,11 @@ export default function RegisterScreen() {
             />
           </View>
 
-          <View style={styles.inputContainer}>
-            <Ionicons name="lock-closed-outline" size={20} color="#666" style={styles.inputIcon} />
+          <View style={[styles.inputContainer, isRTL && styles.rowReverse]}>
+            <Ionicons name="lock-closed-outline" size={20} color="#666" style={[styles.inputIcon, isRTL && styles.inputIconRTL]} />
             <TextInput
               style={styles.input}
-              placeholder="Salasana (min. 6 merkkiä)"
+              placeholder={t('passwordMin')}
               value={password}
               onChangeText={setPassword}
               secureTextEntry
@@ -109,7 +111,7 @@ export default function RegisterScreen() {
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.buttonText}>Rekisteröidy</Text>
+              <Text style={styles.buttonText}>{t('register')}</Text>
             )}
           </TouchableOpacity>
 
@@ -118,7 +120,7 @@ export default function RegisterScreen() {
             onPress={() => router.back()}
           >
             <Text style={styles.linkText}>
-              Onko sinulla jo tili? <Text style={styles.linkTextBold}>Kirjaudu sisään</Text>
+              {t('alreadyHaveAccount')} <Text style={styles.linkTextBold}>{t('signIn')}</Text>
             </Text>
           </TouchableOpacity>
         </View>
@@ -152,6 +154,9 @@ const styles = StyleSheet.create({
     color: '#666',
     marginTop: 8,
   },
+  subtitleRTL: {
+    textAlign: 'right',
+  },
   form: {
     width: '100%',
   },
@@ -166,6 +171,10 @@ const styles = StyleSheet.create({
   },
   inputIcon: {
     marginRight: 12,
+  },
+  inputIconRTL: {
+    marginRight: 0,
+    marginLeft: 12,
   },
   input: {
     flex: 1,
@@ -199,5 +208,8 @@ const styles = StyleSheet.create({
   linkTextBold: {
     color: '#007AFF',
     fontWeight: '600',
+  },
+  rowReverse: {
+    flexDirection: 'row-reverse',
   },
 });

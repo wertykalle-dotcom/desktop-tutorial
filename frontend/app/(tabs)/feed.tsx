@@ -12,41 +12,36 @@ import {
   TextInput,
   Platform,
   Animated,
+  useWindowDimensions,
 } from 'react-native';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useLocalSearchParams } from 'expo-router';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { formatRelativeTime, formatLocalDate } from '../../src/utils/time';
+import { useI18n } from '../../src/contexts/I18nContext';
+import { buildDwellEvents, getVisiblePostIds, type FeedItem as DwellFeedItem, type Post, type Comment } from '../../src/features/feed/dwell';
 
 const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 const BACKEND_BASE = EXPO_PUBLIC_BACKEND_URL.replace(/\/+$/, '').replace(/\/api$/, '');
 
-interface Comment {
-  comment_id: string;
-  post_id: string;
-  user_id: string;
-  username: string;
-  profile_picture?: string;
-  text: string;
-  created_at: string;
-}
+// Re-export types for local use
+type LocalPost = Post;
 
-interface Post {
-  post_id: string;
-  user_id: string;
-  username: string;
-  profile_picture?: string;
-  text: string;
-  image?: string;
-  likes_count: number;
-  comments_count: number;
-  is_liked: boolean;
-  comments?: Comment[];
-  created_at: string;
-}
+type AdConfig = {
+  placements: {
+    in_feed: boolean;
+    sidebar: boolean;
+    interstitial: boolean;
+  };
+  frequency: number;
+  network_enabled: boolean;
+  network_tag: string;
+};
 
-const moveHighlightedPostFirst = (items: Post[], highlightedId?: string) => {
+type FeedItem = DwellFeedItem | { type: 'ad'; id: string; label: string };
+
+const moveHighlightedPostFirst = (items: LocalPost[], highlightedId?: string) => {
   if (!highlightedId) return items;
   const index = items.findIndex((post) => post.post_id === highlightedId);
   if (index <= 0) return items;
@@ -56,12 +51,12 @@ const moveHighlightedPostFirst = (items: Post[], highlightedId?: string) => {
   return next;
 };
 
-export default function FeedScreen() {
+function FeedScreen() {
   const params = useLocalSearchParams<{ highlightPostId?: string | string[] }>();
   const highlightPostId = Array.isArray(params.highlightPostId)
     ? params.highlightPostId[0]
     : params.highlightPostId;
-  const [posts, setPosts] = useState<Post[]>([]);
+  const [posts, setPosts] = useState<LocalPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [followingOnly, setFollowingOnly] = useState(false);
@@ -76,10 +71,23 @@ export default function FeedScreen() {
   const [mutedByUserId, setMutedByUserId] = useState<Record<string, boolean>>({});
   const [blockedByUserId, setBlockedByUserId] = useState<Record<string, boolean>>({});
   const [imageAspectByPostId, setImageAspectByPostId] = useState<Record<string, number>>({});
+  const [adConfig, setAdConfig] = useState<AdConfig>({
+    placements: { in_feed: false, sidebar: false, interstitial: false },
+    frequency: 5,
+    network_enabled: false,
+    network_tag: '',
+  });
+  const [interstitialVisible, setInterstitialVisible] = useState(false);
   const { token, user } = useAuth();
   const { apiFetch } = useApiClient();
+  const { t, isRTL } = useI18n();
+  const { width } = useWindowDimensions();
   const highlightPulse = useRef(new Animated.Value(0)).current;
   const highlightGlow = useRef(new Animated.Value(0)).current;
+  const activePostStartRef = useRef<Record<string, number>>({});
+  const visiblePostIdsRef = useRef<Set<string>>(new Set());
+  const dwellFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isNewUser = (user?.posts_count ?? 0) < 3 && (user?.followers_count ?? 0) === 0 && (user?.following_count ?? 0) <= 2;
 
   const resolveMediaUrl = (uri?: string) => {
     if (!uri) return undefined;
@@ -96,11 +104,12 @@ export default function FeedScreen() {
     }
     try {
       const response = await apiFetch(`/posts?following_only=${followingOnly ? 'true' : 'false'}`);
+      const adResp = await apiFetch('/ads/config', {}, { requireAuth: false });
       if (!response || response.status === 401) return;
 
       if (response.ok) {
         const data = await response.json();
-        const normalizedPosts = Array.isArray(data) ? (data as Post[]) : [];
+        const normalizedPosts = Array.isArray(data) ? (data as LocalPost[]) : [];
         const orderedPosts = moveHighlightedPostFirst(normalizedPosts, highlightPostId);
         setPosts(orderedPosts);
         if (highlightPostId && orderedPosts.some((post) => post.post_id === highlightPostId)) {
@@ -133,6 +142,22 @@ export default function FeedScreen() {
           }
           setFollowingByUserId((prev) => ({ ...prev, ...nextMap }));
         }
+        if (adResp?.ok) {
+          const adPayload = await adResp.json();
+          setAdConfig({
+            placements: {
+              in_feed: !!adPayload?.placements?.in_feed,
+              sidebar: !!adPayload?.placements?.sidebar,
+              interstitial: !!adPayload?.placements?.interstitial,
+            },
+            frequency: Math.max(1, Number(adPayload?.frequency || 5)),
+            network_enabled: !!adPayload?.network_enabled,
+            network_tag: String(adPayload?.network_tag || ''),
+          });
+          if (adPayload?.placements?.interstitial && adPayload?.network_enabled) {
+            setInterstitialVisible(true);
+          }
+        }
       } else {
         const raw = await response.text();
         console.error('Feed fetch failed:', response.status, raw);
@@ -145,6 +170,12 @@ export default function FeedScreen() {
       setRefreshing(false);
     }
   }, [followingOnly, highlightPostId, token, user?.user_id, apiFetch]);
+
+  useEffect(() => {
+    if (!adConfig.placements.interstitial || !adConfig.network_enabled) {
+      setInterstitialVisible(false);
+    }
+  }, [adConfig.placements.interstitial, adConfig.network_enabled]);
 
   useEffect(() => {
     fetchFeed();
@@ -176,10 +207,90 @@ export default function FeedScreen() {
     ]).start();
   }, [highlightPostId, posts, highlightPulse, highlightGlow]);
 
+  const sendDwellEvent = useCallback(async (postId: string, dwellMs: number) => {
+    if (!token || dwellMs < 3000) return;
+    try {
+      await apiFetch('/interactions/track', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          post_id: postId,
+          dwell_ms: dwellMs,
+        }),
+      });
+    } catch (error) {
+      console.error('Error tracking dwell time:', error);
+    }
+  }, [apiFetch, token]);
+
+  const flushVisibleDwell = useCallback(async () => {
+    const now = Date.now();
+    const payloads = buildDwellEvents(
+      visiblePostIdsRef.current,
+      new Set<string>(),
+      activePostStartRef.current,
+      now,
+    ).events;
+    visiblePostIdsRef.current.clear();
+    for (const item of payloads) {
+      await sendDwellEvent(item.postId, item.dwellMs);
+      delete activePostStartRef.current[item.postId];
+    }
+  }, [sendDwellEvent]);
+
+  const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: { item: FeedItem; isViewable: boolean }[] }) => {
+    const now = Date.now();
+    const nextVisibleIds = getVisiblePostIds(viewableItems);
+    const { events, nextActiveStarts } = buildDwellEvents(
+      visiblePostIdsRef.current,
+      nextVisibleIds,
+      activePostStartRef.current,
+      now,
+    );
+    visiblePostIdsRef.current = nextVisibleIds;
+    activePostStartRef.current = nextActiveStarts;
+    for (const event of events) {
+      void sendDwellEvent(event.postId, event.dwellMs);
+    }
+    if (dwellFlushTimerRef.current) {
+      clearTimeout(dwellFlushTimerRef.current);
+    }
+    dwellFlushTimerRef.current = setTimeout(() => {
+      void flushVisibleDwell();
+    }, 1500);
+  }, [flushVisibleDwell, sendDwellEvent]);
+
+  useEffect(() => {
+    return () => {
+      if (dwellFlushTimerRef.current) {
+        clearTimeout(dwellFlushTimerRef.current);
+      }
+      void flushVisibleDwell();
+    };
+  }, [flushVisibleDwell]);
+
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     fetchFeed();
   }, [fetchFeed]);
+
+  const feedItems: FeedItem[] = [];
+  posts.forEach((post, index) => {
+    feedItems.push({ type: 'post', post });
+    const shouldInsertAd =
+      adConfig.placements.in_feed &&
+      adConfig.network_enabled &&
+      (index + 1) % adConfig.frequency === 0;
+    if (shouldInsertAd) {
+      feedItems.push({
+        type: 'ad',
+        id: `ad_${post.post_id}_${index}`,
+        label: adConfig.network_tag ? `${t('feedAdNetwork')} · ${adConfig.network_tag}` : t('feedAdNetwork'),
+      });
+    }
+  });
 
   const toggleFollow = async (targetUserId: string) => {
     if (!targetUserId || targetUserId === user?.user_id) return;
@@ -203,7 +314,7 @@ export default function FeedScreen() {
       }
     } catch (error) {
       console.error('Error toggling follow:', error);
-      Alert.alert('Virhe', 'Seurannan päivitys epäonnistui');
+      Alert.alert(t('error'), t('feedFollowingUpdateFailed'));
     } finally {
       setFollowLoadingByUserId((prev) => ({ ...prev, [targetUserId]: false }));
     }
@@ -228,10 +339,10 @@ export default function FeedScreen() {
         const raw = await response.text();
         throw new Error(`Report failed (${response.status}): ${raw}`);
       }
-      Alert.alert('Kiitos', 'Ilmoitus lähetetty moderointiin.');
+      Alert.alert(t('error'), t('feedReportSent'));
     } catch (error) {
       console.error('Error reporting post:', error);
-      Alert.alert('Virhe', 'Ilmoituksen lähetys epäonnistui');
+      Alert.alert(t('error'), t('feedReportFailed'));
     }
   };
 
@@ -251,10 +362,10 @@ export default function FeedScreen() {
       if (isMuted) {
         setPosts((prev) => prev.filter((p) => p.user_id !== targetUserId));
       }
-      Alert.alert('Valmis', isMuted ? 'Käyttäjä hiljennetty.' : 'Käyttäjän hiljennys poistettu.');
+      Alert.alert(t('error'), isMuted ? t('feedUserMuted') : t('feedUserUnmuted'));
     } catch (error) {
       console.error('Error toggling mute:', error);
-      Alert.alert('Virhe', 'Hiljennyksen päivitys epäonnistui');
+      Alert.alert(t('error'), t('feedMuteUpdateFailed'));
     }
   };
 
@@ -274,10 +385,10 @@ export default function FeedScreen() {
       if (isBlocked) {
         setPosts((prev) => prev.filter((p) => p.user_id !== targetUserId));
       }
-      Alert.alert('Valmis', isBlocked ? 'Käyttäjä estetty.' : 'Käyttäjän esto poistettu.');
+      Alert.alert(t('error'), isBlocked ? t('feedUserBlocked') : t('feedUserUnblocked'));
     } catch (error) {
       console.error('Error toggling block:', error);
-      Alert.alert('Virhe', 'Eston päivitys epäonnistui');
+      Alert.alert(t('error'), t('feedBlockUpdateFailed'));
     }
   };
 
@@ -286,13 +397,13 @@ export default function FeedScreen() {
     const isMuted = !!mutedByUserId[post.user_id];
     const isBlocked = !!blockedByUserId[post.user_id];
     Alert.alert(
-      'Toiminnot',
+      t('feedOpenActions'),
       `@${post.username}`,
       [
-        { text: 'Ilmianna julkaisu', onPress: () => reportPost(post.post_id) },
-        { text: isMuted ? 'Poista hiljennys' : 'Hiljennä käyttäjä', onPress: () => toggleMute(post.user_id) },
-        { text: isBlocked ? 'Poista esto' : 'Estä käyttäjä', style: 'destructive', onPress: () => toggleBlock(post.user_id) },
-        { text: 'Peruuta', style: 'cancel' },
+        { text: t('feedReportPost'), onPress: () => reportPost(post.post_id) },
+        { text: isMuted ? t('feedUnmuteUser') : t('feedMuteUser'), onPress: () => toggleMute(post.user_id) },
+        { text: isBlocked ? t('feedUnblockUser') : t('feedBlockUser'), style: 'destructive', onPress: () => toggleBlock(post.user_id) },
+        { text: t('cancel'), style: 'cancel' },
       ]
     );
   };
@@ -359,7 +470,7 @@ export default function FeedScreen() {
         )
       );
       console.error('Error toggling like:', error);
-      Alert.alert('Virhe', 'Tykkäyksen päivittäminen epäonnistui');
+      Alert.alert(t('error'), t('feedLikeFailed'));
     } finally {
       setLikeLoadingByPost((prev) => ({ ...prev, [postId]: false }));
     }
@@ -408,7 +519,7 @@ export default function FeedScreen() {
       setExpandedComments((prev) => ({ ...prev, [postId]: true }));
     } catch (error) {
       console.error('Error creating comment:', error);
-      Alert.alert('Virhe', 'Kommentin lähetys epäonnistui');
+      Alert.alert(t('error'), t('feedCommentFailed'));
     } finally {
       setCommentLoadingByPost((prev) => ({ ...prev, [postId]: false }));
     }
@@ -458,7 +569,7 @@ export default function FeedScreen() {
       setEditingCommentIdByPost((prev) => ({ ...prev, [postId]: null }));
     } catch (error) {
       console.error('Error updating comment:', error);
-      Alert.alert('Virhe', 'Kommentin muokkaus epäonnistui');
+      Alert.alert(t('error'), t('feedCommentLoadFailed'));
     } finally {
       setCommentLoadingByPost((prev) => ({ ...prev, [postId]: false }));
     }
@@ -492,7 +603,7 @@ export default function FeedScreen() {
       setEditingCommentIdByPost((prev) => ({ ...prev, [postId]: null }));
     } catch (error) {
       console.error('Error deleting comment:', error);
-      Alert.alert('Virhe', 'Kommentin poisto epäonnistui');
+      Alert.alert(t('error'), t('feedCommentDeleteFailed'));
     } finally {
       setCommentLoadingByPost((prev) => ({ ...prev, [postId]: false }));
     }
@@ -500,12 +611,12 @@ export default function FeedScreen() {
 
   const confirmDeleteComment = (postId: string, commentId: string) => {
     Alert.alert(
-      'Poista kommentti',
-      'Haluatko varmasti poistaa tämän kommentin?',
+      t('feedCommentDeleteTitle'),
+      t('feedCommentDeleteBody'),
       [
-        { text: 'Peruuta', style: 'cancel' },
+        { text: t('cancel'), style: 'cancel' },
         {
-          text: 'Poista',
+          text: t('feedCommentDelete'),
           style: 'destructive',
           onPress: () => deleteComment(postId, commentId),
         },
@@ -513,7 +624,7 @@ export default function FeedScreen() {
     );
   };
 
-  const renderPost = ({ item }: { item: Post }) => {
+  const renderPost = ({ item }: { item: LocalPost }) => {
     const isHighlighted = highlightPostId === item.post_id;
     return (
     <Animated.View
@@ -538,8 +649,8 @@ export default function FeedScreen() {
         },
       ]}
     >
-      <View style={styles.postHeader}>
-        <View style={styles.userInfo}>
+      <View style={[styles.postHeader, isRTL && styles.rowReverse]}>
+        <View style={[styles.userInfo, isRTL && styles.rowReverse]}>
           {item.profile_picture ? (
             <Image
               source={{ uri: resolveMediaUrl(item.profile_picture) }}
@@ -577,11 +688,11 @@ export default function FeedScreen() {
               },
             ]}
           >
-            <Text style={styles.notificationBadgeText}>Ilmoituksesta</Text>
+            <Text style={styles.notificationBadgeText}>{t('feedNotified')}</Text>
           </Animated.View>
         )}
         {item.user_id !== user?.user_id && (
-          <View style={styles.headerActions}>
+          <View style={[styles.headerActions, isRTL && styles.rowReverse]}>
             <TouchableOpacity
               style={styles.moreButton}
               onPress={() => openSafetyActions(item)}
@@ -605,7 +716,7 @@ export default function FeedScreen() {
                     followingByUserId[item.user_id] && styles.followingButtonText,
                   ]}
                 >
-                  {followingByUserId[item.user_id] ? 'Seurataan' : 'Seuraa'}
+                  {followingByUserId[item.user_id] ? t('feedFollowingNow') : t('feedFollow')}
                 </Text>
               )}
             </TouchableOpacity>
@@ -613,7 +724,7 @@ export default function FeedScreen() {
         )}
       </View>
 
-      <Text style={styles.postText}>{item.text}</Text>
+      <Text style={[styles.postText, isRTL && styles.textRight]}>{item.text}</Text>
 
       {item.image && (
         <View style={styles.postImageWrap}>
@@ -640,9 +751,9 @@ export default function FeedScreen() {
         </View>
       )}
 
-      <View style={styles.postActions}>
+      <View style={[styles.postActions, isRTL && styles.rowReverse]}>
         <TouchableOpacity
-          style={styles.actionButton}
+          style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
           onPress={() => handleLike(item)}
           disabled={likeLoadingByPost[item.post_id]}
         >
@@ -651,15 +762,15 @@ export default function FeedScreen() {
             size={24}
             color={item.is_liked ? '#FF3B30' : '#666'}
           />
-          <Text style={styles.actionText}>{item.likes_count}</Text>
+          <Text style={[styles.actionText, isRTL && styles.actionTextRTL]}>{item.likes_count}</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
-          style={styles.actionButton}
+          style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
           onPress={() => toggleComments(item.post_id)}
         >
           <Ionicons name="chatbubble-outline" size={22} color="#666" />
-          <Text style={styles.actionText}>{item.comments_count || 0}</Text>
+          <Text style={[styles.actionText, isRTL && styles.actionTextRTL]}>{item.comments_count || 0}</Text>
         </TouchableOpacity>
       </View>
 
@@ -671,22 +782,22 @@ export default function FeedScreen() {
               const isEditing = editingCommentIdByPost[item.post_id] === comment.comment_id;
               return (
                 <View key={comment.comment_id} style={styles.commentRow}>
-                  <View style={styles.commentTopRow}>
-                    <Text style={styles.commentAuthor}>{comment.username}</Text>
+                  <View style={[styles.commentTopRow, isRTL && styles.rowReverse]}>
+                    <Text style={[styles.commentAuthor, isRTL && styles.textRight]}>{comment.username}</Text>
                     {isOwnComment && !isEditing && (
-                      <View style={styles.commentActionRow}>
+                      <View style={[styles.commentActionRow, isRTL && styles.rowReverse]}>
                         <TouchableOpacity onPress={() => startEditComment(item.post_id, comment)}>
-                          <Text style={styles.commentActionText}>Muokkaa</Text>
+                          <Text style={styles.commentActionText}>{t('feedCommentEdit')}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity onPress={() => confirmDeleteComment(item.post_id, comment.comment_id)}>
-                          <Text style={[styles.commentActionText, styles.commentDeleteText]}>Poista</Text>
+                          <Text style={[styles.commentActionText, styles.commentDeleteText]}>{t('feedCommentDelete')}</Text>
                         </TouchableOpacity>
                       </View>
                     )}
                   </View>
 
                   {isEditing ? (
-                    <View style={styles.commentEditRow}>
+                    <View style={[styles.commentEditRow, isRTL && styles.rowReverse]}>
                       <TextInput
                         style={styles.commentEditInput}
                         value={editingCommentTextById[comment.comment_id] || ''}
@@ -696,26 +807,26 @@ export default function FeedScreen() {
                         editable={!commentLoadingByPost[item.post_id]}
                       />
                       <TouchableOpacity onPress={() => saveEditedComment(item.post_id, comment.comment_id)}>
-                        <Text style={styles.commentSaveText}>Tallenna</Text>
+                        <Text style={styles.commentSaveText}>{t('feedCommentSave')}</Text>
                       </TouchableOpacity>
                       <TouchableOpacity onPress={() => cancelEditComment(item.post_id)}>
-                        <Text style={styles.commentCancelText}>Peruuta</Text>
+                        <Text style={styles.commentCancelText}>{t('feedCommentCancel')}</Text>
                       </TouchableOpacity>
                     </View>
                   ) : (
-                    <Text style={styles.commentText}>{comment.text}</Text>
+                    <Text style={[styles.commentText, isRTL && styles.textRight]}>{comment.text}</Text>
                   )}
                 </View>
               );
             })
           ) : (
-            <Text style={styles.noCommentsText}>Ei kommentteja vielä</Text>
+            <Text style={styles.noCommentsText}>{t('feedNoComments')}</Text>
           )}
 
-          <View style={styles.commentInputRow}>
+          <View style={[styles.commentInputRow, isRTL && styles.rowReverse]}>
             <TextInput
               style={styles.commentInput}
-              placeholder="Kirjoita kommentti..."
+              placeholder={t('feedWriteComment')}
               value={commentInputs[item.post_id] || ''}
               onChangeText={(value) =>
                 setCommentInputs((prev) => ({ ...prev, [item.post_id]: value }))
@@ -723,7 +834,7 @@ export default function FeedScreen() {
               editable={!commentLoadingByPost[item.post_id]}
             />
             <TouchableOpacity
-              style={styles.sendButton}
+              style={[styles.sendButton, isRTL && styles.sendButtonRTL]}
               onPress={() => submitComment(item.post_id)}
               disabled={commentLoadingByPost[item.post_id]}
             >
@@ -740,6 +851,18 @@ export default function FeedScreen() {
   );
   };
 
+  const renderFeedItem = ({ item }: { item: FeedItem }) => {
+    if (item.type === 'ad') {
+      return (
+        <View style={styles.adCard}>
+          <Text style={[styles.adLabel, isRTL && styles.textRight]}>{item.label}</Text>
+          <Text style={[styles.adText, isRTL && styles.textRight]}>{t('feedSponsoredContent')}</Text>
+        </View>
+      );
+    }
+    return renderPost({ item: item.post });
+  };
+
   if (loading) {
     return (
       <View style={styles.centerContainer}>
@@ -750,32 +873,88 @@ export default function FeedScreen() {
 
   return (
     <View style={styles.container}>
+      {interstitialVisible ? (
+        <View style={styles.interstitialOverlay}>
+          <View style={styles.interstitialCard}>
+            <Text style={[styles.interstitialLabel, isRTL && styles.textRight]}>{t('feedInterstitial')}</Text>
+            <Text style={styles.interstitialTitle}>
+              {adConfig.network_tag ? `${t('feedAdNetwork')} · ${adConfig.network_tag}` : t('feedAdNetwork')}
+            </Text>
+            <Text style={[styles.interstitialText, isRTL && styles.textRight]}>{t('feedInterstitialActive')}</Text>
+            <TouchableOpacity style={styles.interstitialCloseButton} onPress={() => setInterstitialVisible(false)}>
+              <Text style={styles.interstitialCloseText}>{t('feedCloseAd')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : null}
       <View style={styles.feedFilterRow}>
         <TouchableOpacity
           style={[styles.feedFilterButton, !followingOnly && styles.feedFilterButtonActive]}
           onPress={() => setFollowingOnly(false)}
         >
-          <Text style={[styles.feedFilterText, !followingOnly && styles.feedFilterTextActive]}>Kaikki</Text>
+          <Text style={[styles.feedFilterText, !followingOnly && styles.feedFilterTextActive]}>{t('feedAll')}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.feedFilterButton, followingOnly && styles.feedFilterButtonActive]}
           onPress={() => setFollowingOnly(true)}
         >
-          <Text style={[styles.feedFilterText, followingOnly && styles.feedFilterTextActive]}>Seuraamani</Text>
+          <Text style={[styles.feedFilterText, followingOnly && styles.feedFilterTextActive]}>{t('feedFollowing')}</Text>
         </TouchableOpacity>
       </View>
+      {adConfig.placements.sidebar && width >= 768 ? (
+        <View style={styles.sidebarAd}>
+          <Text style={[styles.adLabel, isRTL && styles.textRight]}>{t('feedAdNetwork')}</Text>
+          <Text style={[styles.adText, isRTL && styles.textRight]}>{t('feedInterstitialActive')}</Text>
+        </View>
+      ) : null}
+      <View style={[styles.personaBanner, isNewUser ? styles.personaBannerExplore : styles.personaBannerPersonal]}>
+        <Text style={[styles.personaEyebrow, isRTL && styles.textRight]}>
+          {isNewUser ? t('feedExploreModeLabel') : t('feedPersonalModeLabel')}
+        </Text>
+        <Text style={[styles.personaTitle, isRTL && styles.textRight]}>
+          {isNewUser ? t('feedExploreModeTitle') : t('feedPersonalModeTitle')}
+        </Text>
+        <Text style={[styles.personaBody, isRTL && styles.textRight]}>
+          {isNewUser ? t('feedExploreModeBody') : t('feedPersonalModeBody')}
+        </Text>
+      </View>
+      {isNewUser ? (
+        <View style={styles.onboardingCard}>
+          <Text style={styles.onboardingEyebrow}>{t('onboardingLabel')}</Text>
+          <Text style={styles.onboardingTitle}>{t('onboardingTitle')}</Text>
+          <View style={styles.onboardingList}>
+            <View style={[styles.onboardingRow, isRTL && styles.rowReverse]}>
+              <Ionicons name="people-outline" size={16} color="#007AFF" />
+              <Text style={[styles.onboardingItem, isRTL && styles.textRight]}>{t('onboardingStepFollow')}</Text>
+            </View>
+            <View style={[styles.onboardingRow, isRTL && styles.rowReverse]}>
+              <Ionicons name="create-outline" size={16} color="#007AFF" />
+              <Text style={[styles.onboardingItem, isRTL && styles.textRight]}>{t('onboardingStepPost')}</Text>
+            </View>
+            <View style={[styles.onboardingRow, isRTL && styles.rowReverse]}>
+              <Ionicons name="chatbubble-ellipses-outline" size={16} color="#007AFF" />
+              <Text style={[styles.onboardingItem, isRTL && styles.textRight]}>{t('onboardingStepReact')}</Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
       <FlatList
-        data={posts}
-        renderItem={renderPost}
-        keyExtractor={(item) => item.post_id}
+        data={feedItems}
+        renderItem={renderFeedItem}
+        keyExtractor={(item) => item.type === 'post' ? item.post.post_id : item.id}
+        viewabilityConfig={{
+          itemVisiblePercentThreshold: 60,
+          minimumViewTime: 300,
+        }}
+        onViewableItemsChanged={onViewableItemsChanged}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
             <Ionicons name="paper-plane-outline" size={64} color="#ccc" />
-            <Text style={styles.emptyText}>Ei julkaisuja vielä</Text>
-            <Text style={styles.emptySubtext}>Luo ensimmäinen julkaisu!</Text>
+            <Text style={styles.emptyText}>{t('feedNoPosts')}</Text>
+            <Text style={styles.emptySubtext}>{t('feedCreateFirstPost')}</Text>
           </View>
         }
         contentContainerStyle={posts.length === 0 ? styles.emptyList : null}
@@ -783,6 +962,8 @@ export default function FeedScreen() {
     </View>
   );
 }
+
+export default FeedScreen;
 
 const styles = StyleSheet.create({
   container: {
@@ -830,6 +1011,163 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     padding: 16,
   },
+  adCard: {
+    backgroundColor: '#FFF7E6',
+    borderColor: '#F4B400',
+    borderWidth: 1,
+    marginBottom: 8,
+    padding: 16,
+  },
+  adLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#A15C00',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  textRight: {
+    textAlign: 'right',
+  },
+  adText: {
+    fontSize: 14,
+    color: '#5C3B00',
+    fontWeight: '600',
+  },
+  personaBanner: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 6,
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+  },
+  personaBannerExplore: {
+    backgroundColor: '#F7FBFF',
+    borderColor: '#CFE4FF',
+  },
+  personaBannerPersonal: {
+    backgroundColor: '#F5F9F4',
+    borderColor: '#D6E8D1',
+  },
+  personaEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: '#60708A',
+    marginBottom: 4,
+  },
+  personaTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#16233A',
+    marginBottom: 4,
+  },
+  personaBody: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: '#3F4B63',
+  },
+  onboardingCard: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    marginBottom: 8,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#CFE4FF',
+    backgroundColor: '#F7FBFF',
+    padding: 16,
+  },
+  onboardingEyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    color: '#60708A',
+    marginBottom: 4,
+  },
+  onboardingTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#16233A',
+    marginBottom: 10,
+  },
+  onboardingList: {
+    gap: 8,
+  },
+  onboardingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  onboardingItem: {
+    flex: 1,
+    fontSize: 13,
+    color: '#31415E',
+    fontWeight: '600',
+  },
+  sidebarAd: {
+    backgroundColor: '#fff',
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 4,
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#ececec',
+  },
+  interstitialAd: {
+    backgroundColor: '#111827',
+    marginHorizontal: 12,
+    marginTop: 8,
+    marginBottom: 4,
+    padding: 12,
+    borderRadius: 12,
+  },
+  interstitialOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    zIndex: 50,
+    backgroundColor: 'rgba(17, 24, 39, 0.72)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  interstitialCard: {
+    width: '100%',
+    maxWidth: 420,
+    backgroundColor: '#111827',
+    borderRadius: 20,
+    padding: 20,
+    gap: 12,
+  },
+  interstitialLabel: {
+    color: '#FCD34D',
+    fontSize: 12,
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
+  interstitialTitle: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '800',
+    textAlign: 'center',
+  },
+  interstitialText: {
+    color: '#D1D5DB',
+    fontSize: 14,
+    textAlign: 'center',
+  },
+  interstitialCloseButton: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#fff',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  interstitialCloseText: {
+    color: '#111827',
+    fontWeight: '800',
+  },
   highlightedPostCard: {
     borderWidth: 2,
     borderColor: '#007AFF',
@@ -854,6 +1192,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
+  },
+  rowReverse: {
+    flexDirection: 'row-reverse',
   },
   userInfo: {
     flexDirection: 'row',
@@ -944,10 +1285,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginRight: 24,
   },
+  actionButtonRTL: {
+    marginRight: 0,
+    marginLeft: 24,
+  },
   actionText: {
     fontSize: 14,
     color: '#666',
     marginLeft: 6,
+  },
+  actionTextRTL: {
+    marginLeft: 0,
+    marginRight: 6,
   },
   commentsContainer: {
     marginTop: 12,
@@ -1037,6 +1386,10 @@ const styles = StyleSheet.create({
   sendButton: {
     marginLeft: 10,
     padding: 8,
+  },
+  sendButtonRTL: {
+    marginLeft: 0,
+    marginRight: 10,
   },
   emptyList: {
     flexGrow: 1,

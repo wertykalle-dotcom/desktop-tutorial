@@ -2,6 +2,7 @@
 // Concrete implementations live in index.ts (native) and index.web.ts (web).
 
 export type StorageItemKey = string;
+// Sallitut tallennustyypit pidetään tiukkoina, jotta serialisointi pysyy ennustettavana.
 export type StorageItemValue = string | number | boolean | null;
 
 // Helper for subclasses to enforce that they don't declare methods beyond
@@ -10,7 +11,7 @@ export type AssertNoExtras<T extends never> = T;
 
 export abstract class StorageBase {
   protected warn(op: string, key: StorageItemKey, e: unknown) {
-    console.warn(`[storage] ${op}(${key}) failed`, e);
+    console.warn(`[storage] ${op}{${key}} failed`, e);
   }
 
   // raw is whatever AsyncStorage / SecureStore returned: a JSON-encoded string

@@ -25,7 +25,7 @@ describe('time utils', () => {
   });
 
   test('formats recent future times relatively', () => {
-    expect(formatRelativeTime('2026-06-03T12:05:00.000Z')).toBe('5 minuutin kuluttua');
+    expect(formatRelativeTime('2026-06-03T12:05:00.000Z')).toBe('5 minuutin päästä');
   });
 
   test('falls back to local date for older values', () => {

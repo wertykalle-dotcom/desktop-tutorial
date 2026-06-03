@@ -3,6 +3,7 @@ import { AuthProvider } from '../src/contexts/AuthContext';
 import { useEffect } from 'react';
 import * as Font from 'expo-font';
 import { Asset } from 'expo-asset';
+import { I18nProvider } from '../src/contexts/I18nContext';
 
 export default function RootLayout() {
   useEffect(() => {
@@ -23,8 +24,10 @@ export default function RootLayout() {
   }, []);
 
   return (
-    <AuthProvider>
-      <Slot />
-    </AuthProvider>
+    <I18nProvider>
+      <AuthProvider>
+        <Slot />
+      </AuthProvider>
+    </I18nProvider>
   );
 }

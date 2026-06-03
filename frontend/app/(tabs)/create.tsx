@@ -17,6 +17,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useI18n } from '../../src/contexts/I18nContext';
 
 const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 const API_BASE = `${EXPO_PUBLIC_BACKEND_URL.replace(/\/+$/, '').replace(/\/api$/, '')}/api`;
@@ -27,13 +28,14 @@ export default function CreatePostScreen() {
   const [webImageFile, setWebImageFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const { token } = useAuth();
+  const { t, isRTL } = useI18n();
   const router = useRouter();
 
   const pickImage = async (useCamera: boolean) => {
     try {
       if (Platform.OS === 'web') {
         if (useCamera) {
-          Alert.alert('Huom', 'Webissä valitaan kuva tiedostosta.');
+          Alert.alert(t('createChooseImage'), t('createWebImageNote'));
         }
         const input = document.createElement('input');
         input.type = 'file';
@@ -53,7 +55,7 @@ export default function CreatePostScreen() {
       if (useCamera) {
         const permission = await ImagePicker.requestCameraPermissionsAsync();
         if (!permission.granted) {
-          Alert.alert('Lupa vaaditaan', 'Kameran käyttöoikeus vaaditaan');
+          Alert.alert(t('createCameraPermissionTitle'), t('createCameraPermissionBody'));
           return;
         }
         
@@ -66,7 +68,7 @@ export default function CreatePostScreen() {
       } else {
         const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
-          Alert.alert('Lupa vaaditaan', 'Gallerian käyttöoikeus vaaditaan');
+          Alert.alert(t('createCameraPermissionTitle'), t('createGalleryPermissionBody'));
           return;
         }
         
@@ -84,17 +86,17 @@ export default function CreatePostScreen() {
       }
     } catch (error) {
       console.error('Error picking image:', error);
-      Alert.alert('Virhe', 'Kuvan valinta epäonnistui');
+      Alert.alert(t('error'), t('createImagePickFailed'));
     }
   };
 
   const handlePost = async () => {
     if (!text.trim() && !image) {
-      Alert.alert('Virhe', 'Lisää tekstiä tai kuva');
+      Alert.alert(t('error'), t('createAddTextOrImage'));
       return;
     }
     if (!EXPO_PUBLIC_BACKEND_URL || !/^https?:\/\//i.test(EXPO_PUBLIC_BACKEND_URL)) {
-      Alert.alert('Virhe', 'Backend URL puuttuu tai on virheellinen (.env: EXPO_PUBLIC_BACKEND_URL)');
+      Alert.alert(t('error'), t('createMissingBackendUrl'));
       return;
     }
 
@@ -148,25 +150,25 @@ export default function CreatePostScreen() {
       });
 
       if (response.ok) {
-        Alert.alert('Onnistui!', 'Julkaisu luotu');
+        Alert.alert(t('createSuccessTitle'), t('createSuccessBody'));
         setText('');
         setImage(null);
         setWebImageFile(null);
         router.push('/(tabs)/feed');
       } else {
         const raw = await response.text();
-        let detail = 'Julkaisun luonti epäonnistui';
+        let detail = t('createFailed');
         try {
           const parsed = JSON.parse(raw);
           detail = parsed?.detail || detail;
         } catch {
           if (raw) detail = `Palvelinvirhe (${response.status})`;
         }
-        Alert.alert('Virhe', detail);
+        Alert.alert(t('error'), detail);
       }
     } catch (error) {
       console.error('Error creating post:', error);
-      Alert.alert('Virhe', 'Julkaisun luonti epäonnistui');
+      Alert.alert(t('error'), t('createFailed'));
     } finally {
       setLoading(false);
     }
@@ -174,19 +176,19 @@ export default function CreatePostScreen() {
 
   const showImageOptions = () => {
     Alert.alert(
-      'Valitse kuva',
-      'Mistä haluat valita kuvan?',
+      t('createChooseImage'),
+      t('createChooseImagePrompt'),
       [
         {
-          text: 'Kamera',
+          text: t('createCamera'),
           onPress: () => pickImage(true),
         },
         {
-          text: 'Galleria',
+          text: t('createGallery'),
           onPress: () => pickImage(false),
         },
         {
-          text: 'Peruuta',
+          text: t('cancel'),
           style: 'cancel',
         },
       ]
@@ -200,11 +202,11 @@ export default function CreatePostScreen() {
     >
       <ScrollView style={styles.scrollView} keyboardShouldPersistTaps="handled">
         <View style={styles.content}>
-          <Text style={styles.label}>Mitä sinulla on mielessä?</Text>
+          <Text style={styles.label}>{t('createTitle')}</Text>
           
           <TextInput
             style={styles.textInput}
-            placeholder="Kirjoita jotain..."
+            placeholder={t('createPlaceholder')}
             value={text}
             onChangeText={setText}
             multiline
@@ -229,11 +231,11 @@ export default function CreatePostScreen() {
 
           <View style={styles.actions}>
             <TouchableOpacity
-              style={styles.imageButton}
+              style={[styles.imageButton, isRTL && styles.rowReverse]}
               onPress={showImageOptions}
             >
               <Ionicons name="image-outline" size={24} color="#007AFF" />
-              <Text style={styles.imageButtonText}>Lisää kuva</Text>
+              <Text style={[styles.imageButtonText, isRTL && styles.imageButtonTextRTL]}>{t('createAddImage')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -245,7 +247,7 @@ export default function CreatePostScreen() {
             {loading ? (
               <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.postButtonText}>Julkaise</Text>
+              <Text style={styles.postButtonText}>{t('createPublish')}</Text>
             )}
           </TouchableOpacity>
         </View>
@@ -306,11 +308,18 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f5f5',
     borderRadius: 12,
   },
+  rowReverse: {
+    flexDirection: 'row-reverse',
+  },
   imageButtonText: {
     fontSize: 16,
     color: '#007AFF',
     marginLeft: 8,
     fontWeight: '500',
+  },
+  imageButtonTextRTL: {
+    marginLeft: 0,
+    marginRight: 8,
   },
   postButton: {
     backgroundColor: '#007AFF',
