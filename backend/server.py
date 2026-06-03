@@ -43,7 +43,13 @@ else:
 # SQLite connection (optional)
 DATABASE_PATH = os.environ.get('DATABASE_PATH')
 if DATABASE_PATH:
-    SQLITE_DB_PATH = str((ROOT_DIR / DATABASE_PATH).resolve()) if not os.path.isabs(DATABASE_PATH) else DATABASE_PATH
+    # If absolute path, use it directly; otherwise resolve relative to project root
+    if os.path.isabs(DATABASE_PATH):
+        SQLITE_DB_PATH = DATABASE_PATH
+    else:
+        # Get parent of backend directory (project root)
+        PROJECT_ROOT = ROOT_DIR.parent
+        SQLITE_DB_PATH = str((PROJECT_ROOT / DATABASE_PATH).resolve())
 else:
     SQLITE_DB_PATH = None
 DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
