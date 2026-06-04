@@ -5,9 +5,12 @@ export type Post = {
   profile_picture?: string;
   text: string;
   image?: string;
+  repost_post_id?: string | null;
+  repost_count?: number;
   likes_count: number;
   comments_count: number;
   is_liked: boolean;
+  moderation_status?: string | null;
   comments?: Comment[];
   created_at: string;
 };

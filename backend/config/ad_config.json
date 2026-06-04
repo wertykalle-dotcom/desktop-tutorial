@@ -1,0 +1,10 @@
+{
+  "placements": {
+    "in_feed": false,
+    "sidebar": false,
+    "interstitial": false
+  },
+  "frequency": 5,
+  "network_enabled": false,
+  "network_tag": ""
+}

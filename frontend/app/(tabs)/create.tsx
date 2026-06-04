@@ -25,44 +25,50 @@ const API_BASE = `${EXPO_PUBLIC_BACKEND_URL.replace(/\/+$/, '').replace(/\/api$/
 export default function CreatePostScreen() {
   const [text, setText] = useState('');
   const [image, setImage] = useState<string | null>(null);
+  const [video, setVideo] = useState<string | null>(null);
   const [webImageFile, setWebImageFile] = useState<File | null>(null);
+  const [webVideoFile, setWebVideoFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const { token } = useAuth();
   const { t, isRTL } = useI18n();
   const router = useRouter();
 
-  const pickImage = async (useCamera: boolean) => {
+  const pickMedia = async (kind: 'image' | 'video') => {
     try {
       if (Platform.OS === 'web') {
-        if (useCamera) {
-          Alert.alert(t('createChooseImage'), t('createWebImageNote'));
-        }
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = 'image/*';
+        input.accept = kind === 'video' ? 'video/*' : 'image/*';
         input.onchange = () => {
           const file = input.files?.[0];
           if (!file) return;
-          setWebImageFile(file);
-          setImage(URL.createObjectURL(file));
+          if (kind === 'video') {
+            setWebVideoFile(file);
+            setWebImageFile(null);
+            setVideo(URL.createObjectURL(file));
+            setImage(null);
+          } else {
+            setWebImageFile(file);
+            setWebVideoFile(null);
+            setImage(URL.createObjectURL(file));
+            setVideo(null);
+          }
         };
         input.click();
         return;
       }
 
       let result;
-      
-      if (useCamera) {
-        const permission = await ImagePicker.requestCameraPermissionsAsync();
+
+      if (kind === 'video') {
+        const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (!permission.granted) {
-          Alert.alert(t('createCameraPermissionTitle'), t('createCameraPermissionBody'));
+          Alert.alert(t('createCameraPermissionTitle'), t('createGalleryPermissionBody'));
           return;
         }
-        
-        result = await ImagePicker.launchCameraAsync({
-          mediaTypes: ['images'],
-          allowsEditing: true,
-          aspect: [4, 3],
+
+        result = await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['videos'],
           quality: 0.7,
         });
       } else {
@@ -71,7 +77,7 @@ export default function CreatePostScreen() {
           Alert.alert(t('createCameraPermissionTitle'), t('createGalleryPermissionBody'));
           return;
         }
-        
+
         result = await ImagePicker.launchImageLibraryAsync({
           mediaTypes: ['images'],
           allowsEditing: true,
@@ -81,17 +87,24 @@ export default function CreatePostScreen() {
       }
 
       if (!result.canceled && result.assets && result.assets[0] && result.assets[0].uri) {
-        setWebImageFile(null);
-        setImage(result.assets[0].uri);
+        if (kind === 'video') {
+          setWebImageFile(null);
+          setImage(null);
+          setVideo(result.assets[0].uri);
+        } else {
+          setWebVideoFile(null);
+          setVideo(null);
+          setImage(result.assets[0].uri);
+        }
       }
     } catch (error) {
-      console.error('Error picking image:', error);
+      console.error('Error picking media:', error);
       Alert.alert(t('error'), t('createImagePickFailed'));
     }
   };
 
   const handlePost = async () => {
-    if (!text.trim() && !image) {
+    if (!text.trim() && !image && !video) {
       Alert.alert(t('error'), t('createAddTextOrImage'));
       return;
     }
@@ -105,37 +118,54 @@ export default function CreatePostScreen() {
       const formData = new FormData();
       formData.append('text', text.trim());
 
-      if (image) {
+      if (image || video) {
+        const mediaUri = video || image || '';
+        if (!mediaUri) {
+          throw new Error('Missing media URI');
+        }
         if (Platform.OS === 'web' && webImageFile) {
           formData.append('image', webImageFile, webImageFile.name || 'photo.jpg');
+        } else if (Platform.OS === 'web' && webVideoFile) {
+          formData.append('video', webVideoFile, webVideoFile.name || 'video.mp4');
         } else {
-        // Resize / compress the image before upload to avoid large payloads
-          let uploadUri = image;
-          try {
-            const MAX_WIDTH = 1280;
-            const compressQuality = 0.7;
-            const manipResult = await ImageManipulator.manipulateAsync(
-              image,
-              [{ resize: { width: MAX_WIDTH } }],
-              { compress: compressQuality, format: ImageManipulator.SaveFormat.JPEG }
-            );
-            if (manipResult && manipResult.uri) {
-              uploadUri = manipResult.uri;
+          if (video) {
+            const uriParts = mediaUri.split('/');
+            let name = uriParts[uriParts.length - 1] || 'video.mp4';
+            if (!name.match(/\.(mp4|mov|webm)$/i)) name = `${name}.mp4`;
+            let type = 'video/mp4';
+            if (name.toLowerCase().endsWith('.mov')) type = 'video/quicktime';
+            if (name.toLowerCase().endsWith('.webm')) type = 'video/webm';
+            // @ts-ignore - React Native FormData file
+            formData.append('video', { uri: mediaUri, name, type });
+          } else {
+            // Resize / compress the image before upload to avoid large payloads
+            let uploadUri = mediaUri;
+            try {
+              const MAX_WIDTH = 1280;
+              const compressQuality = 0.7;
+              const manipResult = await ImageManipulator.manipulateAsync(
+                mediaUri,
+                [{ resize: { width: MAX_WIDTH } }],
+                { compress: compressQuality, format: ImageManipulator.SaveFormat.JPEG }
+              );
+              if (manipResult && manipResult.uri) {
+                uploadUri = manipResult.uri;
+              }
+            } catch (err) {
+              console.warn('Image manipulation failed, uploading original image', err);
             }
-          } catch (err) {
-            console.warn('Image manipulation failed, uploading original image', err);
-          }
 
-          const uriParts = uploadUri.split('/');
-          let name = uriParts[uriParts.length - 1] || 'photo.jpg';
-          if (!name.match(/\.(jpg|jpeg|png)$/i)) {
-            name = `${name}.jpg`;
-          }
-          let type = 'image/jpeg';
-          if (name.toLowerCase().endsWith('.png')) type = 'image/png';
+            const uriParts = uploadUri.split('/');
+            let name = uriParts[uriParts.length - 1] || 'photo.jpg';
+            if (!name.match(/\.(jpg|jpeg|png)$/i)) {
+              name = `${name}.jpg`;
+            }
+            let type = 'image/jpeg';
+            if (name.toLowerCase().endsWith('.png')) type = 'image/png';
 
-          // @ts-ignore - React Native FormData file
-          formData.append('image', { uri: uploadUri, name, type });
+            // @ts-ignore - React Native FormData file
+            formData.append('image', { uri: uploadUri, name, type });
+          }
         }
       }
 
@@ -153,7 +183,9 @@ export default function CreatePostScreen() {
         Alert.alert(t('createSuccessTitle'), t('createSuccessBody'));
         setText('');
         setImage(null);
+        setVideo(null);
         setWebImageFile(null);
+        setWebVideoFile(null);
         router.push('/(tabs)/feed');
       } else {
         const raw = await response.text();
@@ -181,11 +213,11 @@ export default function CreatePostScreen() {
       [
         {
           text: t('createCamera'),
-          onPress: () => pickImage(true),
+          onPress: () => pickMedia('image'),
         },
         {
           text: t('createGallery'),
-          onPress: () => pickImage(false),
+          onPress: () => pickMedia('image'),
         },
         {
           text: t('cancel'),
@@ -229,6 +261,27 @@ export default function CreatePostScreen() {
             </View>
           )}
 
+          {video && !image && (
+            <View style={styles.videoContainer}>
+              <View style={styles.videoPreview}>
+                <Ionicons name="videocam" size={26} color="#fff" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.videoTitle}>{t('createVideoSelected')}</Text>
+                <Text style={styles.videoSub}>{video}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.removeImageButton}
+                onPress={() => {
+                  setVideo(null);
+                  setWebVideoFile(null);
+                }}
+              >
+                <Ionicons name="close-circle" size={32} color="#fff" />
+              </TouchableOpacity>
+            </View>
+          )}
+
           <View style={styles.actions}>
             <TouchableOpacity
               style={[styles.imageButton, isRTL && styles.rowReverse]}
@@ -236,6 +289,13 @@ export default function CreatePostScreen() {
             >
               <Ionicons name="image-outline" size={24} color="#007AFF" />
               <Text style={[styles.imageButtonText, isRTL && styles.imageButtonTextRTL]}>{t('createAddImage')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.imageButton, isRTL && styles.rowReverse]}
+              onPress={async () => pickMedia('video')}
+            >
+              <Ionicons name="videocam-outline" size={24} color="#7c3aed" />
+              <Text style={[styles.imageButtonText, styles.videoButtonText, isRTL && styles.imageButtonTextRTL]}>{t('createAddVideo')}</Text>
             </TouchableOpacity>
           </View>
 
@@ -286,6 +346,33 @@ const styles = StyleSheet.create({
     position: 'relative',
     marginBottom: 16,
   },
+  videoContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: '#f5f3ff',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+  },
+  videoPreview: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: '#7c3aed',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  videoTitle: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#4c1d95',
+  },
+  videoSub: {
+    fontSize: 12,
+    color: '#6b7280',
+    marginTop: 2,
+  },
   selectedImage: {
     width: '100%',
     height: 250,
@@ -320,6 +407,9 @@ const styles = StyleSheet.create({
   imageButtonTextRTL: {
     marginLeft: 0,
     marginRight: 8,
+  },
+  videoButtonText: {
+    color: '#7c3aed',
   },
   postButton: {
     backgroundColor: '#007AFF',

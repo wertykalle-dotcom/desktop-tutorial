@@ -26,13 +26,15 @@ class PostgresRepository:
         self._ensure_available()
         return fetch_one_postgres(self.dsn, "SELECT * FROM users WHERE username = %(username)s LIMIT 1", {"username": username})
 
-    def get_feed(self, skip: int = 0, limit: int = 20, user_ids: Optional[List[str]] = None) -> List[Dict[str, Any]]:
+    def get_feed(self, skip: int = 0, limit: int = 20, user_ids: Optional[List[str]] = None, exclude_nsfw: bool = False) -> List[Dict[str, Any]]:
         self._ensure_available()
         where_clause = ""
         params: Dict[str, Any] = {"limit": limit, "skip": skip}
         if user_ids:
             where_clause = "WHERE user_id = ANY(%(user_ids)s)"
             params["user_ids"] = user_ids
+        if exclude_nsfw:
+            where_clause = f"{where_clause} AND is_nsfw IS NOT TRUE" if where_clause else "WHERE is_nsfw IS NOT TRUE"
         return fetch_all_postgres(
             self.dsn,
             f"SELECT * FROM posts {where_clause} ORDER BY created_at DESC LIMIT %(limit)s OFFSET %(skip)s",
@@ -44,8 +46,8 @@ class PostgresRepository:
         fetch_all_postgres(
             self.dsn,
             """
-            INSERT INTO posts (post_id, user_id, username, profile_picture, text, image, likes_count, comments_count, created_at, keywords)
-            VALUES (%(post_id)s, %(user_id)s, %(username)s, %(profile_picture)s, %(text)s, %(image)s, %(likes_count)s, %(comments_count)s, %(created_at)s, %(keywords)s)
+            INSERT INTO posts (post_id, user_id, username, profile_picture, text, image, likes_count, comments_count, created_at, keywords, is_nsfw)
+            VALUES (%(post_id)s, %(user_id)s, %(username)s, %(profile_picture)s, %(text)s, %(image)s, %(likes_count)s, %(comments_count)s, %(created_at)s, %(keywords)s, %(is_nsfw)s)
             """,
             post,
         )

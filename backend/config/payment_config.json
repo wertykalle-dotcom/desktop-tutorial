@@ -1,0 +1,11 @@
+{
+  "card_enabled": true,
+  "wallet_enabled": true,
+  "crypto_enabled": true,
+  "card_provider": "visa-or-psp",
+  "wallet_provider": "internal-wallet",
+  "crypto_provider": "onchain",
+  "settlement_currency": "EUR",
+  "wallet_topup_enabled": true,
+  "supported_currencies": ["EUR", "USD", "BTC"]
+}

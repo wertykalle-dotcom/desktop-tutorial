@@ -2,6 +2,7 @@ import React, { createContext, useState, useEffect, useContext, ReactNode } from
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { apiUrl, buildApiHeaders } from '../utils/api/http';
+import { normalizeRole, type RoleKey } from '../utils/roles';
 
 interface User {
   user_id: string;
@@ -12,7 +13,7 @@ interface User {
   followers_count: number;
   following_count: number;
   posts_count: number;
-  role?: 'Super Admin' | 'Moderator' | 'User';
+  role?: RoleKey;
   banned_until?: string | null;
 }
 
@@ -21,7 +22,7 @@ interface AuthContextType {
   token: string | null;
   loading: boolean;
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, username: string) => Promise<void>;
+  register: (email: string, password: string, username: string, dateOfBirth: string, acceptTerms: boolean, acceptPrivacy: boolean) => Promise<void>;
   loginWithGoogle: (sessionId: string) => Promise<void>;
   logout: () => Promise<void>;
   updateUser: (userData: Partial<User>) => void;
@@ -97,6 +98,15 @@ const removeToken = async (): Promise<void> => {
   }
 };
 
+const normalizeUser = (userData: Record<string, unknown> | null | undefined): User | null => {
+  if (!userData) return null;
+  const user = userData as unknown as User;
+  return {
+    ...user,
+    role: normalizeRole(typeof userData.role === 'string' ? userData.role : user.role),
+  };
+};
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
   const [user, setUser] = useState<User | null>(null);
   const [token, setTokenState] = useState<string | null>(null);
@@ -116,7 +126,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
         if (response.ok) {
           const userData = await response.json();
-          setUser(userData);
+          setUser(normalizeUser(userData));
           setTokenState(savedToken);
         } else {
           await removeToken();
@@ -150,19 +160,33 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const data = await response.json();
       await setToken(data.token);
       setTokenState(data.token);
-      setUser(data.user);
+      setUser(normalizeUser(data.user));
     } catch (error) {
       console.error('Login error:', error);
       throw new Error(getFriendlyAuthErrorMessage(error, 'Kirjautuminen epäonnistui'));
     }
   };
 
-  const register = async (email: string, password: string, username: string) => {
+  const register = async (
+    email: string,
+    password: string,
+    username: string,
+    dateOfBirth: string,
+    acceptTerms: boolean,
+    acceptPrivacy: boolean,
+  ) => {
     try {
       const response = await fetch(apiUrl('/auth/register'), {
         method: 'POST',
         headers: buildApiHeaders({ 'Content-Type': 'application/json' }),
-        body: JSON.stringify({ email, password, username })
+        body: JSON.stringify({
+          email,
+          password,
+          username,
+          date_of_birth: dateOfBirth,
+          accept_terms: acceptTerms,
+          accept_privacy: acceptPrivacy,
+        })
       });
 
       if (!response.ok) {
@@ -173,7 +197,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const data = await response.json();
       await setToken(data.token);
       setTokenState(data.token);
-      setUser(data.user);
+      setUser(normalizeUser(data.user));
     } catch (error) {
       console.error('Registration error:', error);
       throw new Error(getFriendlyAuthErrorMessage(error, 'Rekisteröinti epäonnistui'));
@@ -196,7 +220,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       const data = await response.json();
       await setToken(data.token);
       setTokenState(data.token);
-      setUser(data.user);
+      setUser(normalizeUser(data.user));
     } catch (error) {
       console.error('Google login error:', error);
       throw new Error(getFriendlyAuthErrorMessage(error, 'Google-kirjautuminen epäonnistui'));
@@ -221,7 +245,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const updateUser = (userData: Partial<User>) => {
-    setUser((prevUser) => (prevUser ? { ...prevUser, ...userData } : prevUser));
+    setUser((prevUser) => (prevUser ? { ...prevUser, ...userData, role: normalizeRole(userData.role ?? prevUser.role) } : prevUser));
   };
 
   return (

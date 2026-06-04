@@ -7,6 +7,7 @@ import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { hasCompletedOnboarding, isNewUserProfile } from '../../src/utils/onboarding';
+import { canModerate, isSuperAdmin } from '../../src/utils/roles';
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
@@ -14,7 +15,8 @@ export default function TabsLayout() {
   const { token, user, loading } = useAuth();
   const { t, isRTL, isReady } = useI18n();
   const { apiFetch } = useApiClient();
-  const [unreadCount, setUnreadCount] = useState(0);
+  const [notificationUnreadCount, setNotificationUnreadCount] = useState(0);
+  const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const [onboardingReady, setOnboardingReady] = useState(false);
   const [hasOnboarded, setHasOnboarded] = useState(true);
 
@@ -42,20 +44,25 @@ export default function TabsLayout() {
   useEffect(() => {
     const loadUnread = async () => {
       if (!token) {
-        setUnreadCount(0);
+        setNotificationUnreadCount(0);
+        setMessageUnreadCount(0);
         return;
       }
       try {
-        const response = await apiFetch('/notifications/unread-count');
-        if (!response || response.status === 401) {
-          return;
+        const [notificationResponse, messagesResponse] = await Promise.all([
+          apiFetch('/notifications/unread-count'),
+          apiFetch('/messages?limit=1'),
+        ]);
+        if (notificationResponse?.ok) {
+          const payload = await notificationResponse.json();
+          setNotificationUnreadCount(Number(payload?.unread_count || 0));
         }
-        if (response.ok) {
-          const payload = await response.json();
-          setUnreadCount(Number(payload?.unread_count || 0));
+        if (messagesResponse?.ok) {
+          const payload = await messagesResponse.json();
+          setMessageUnreadCount(Number(payload?.unread_count || 0));
         }
       } catch (error) {
-        console.error('Error loading unread notifications count:', error);
+        console.error('Error loading unread counts:', error);
       }
     };
 
@@ -76,8 +83,12 @@ export default function TabsLayout() {
     return <Redirect href="/(auth)/login" />;
   }
 
-  if (isNewUserProfile(user) && !hasOnboarded && pathname !== '/(tabs)/onboarding') {
-    return <Redirect href="/(tabs)/onboarding" />;
+  const userRole = user.role;
+  const canModerateUser = canModerate(userRole);
+  const canAdmin = isSuperAdmin(userRole);
+
+  if (isNewUserProfile(user) && !hasOnboarded && pathname !== '/onboarding') {
+    return <Redirect href="/onboarding" />;
   }
 
   return (
@@ -128,6 +139,24 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="explore"
+        options={{
+          title: t('explore'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="compass" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="search"
+        options={{
+          title: t('search'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="search" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="create"
         options={{
           title: t('createPost'),
@@ -137,16 +166,64 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
+        name="messages"
+        options={{
+          title: t('messages'),
+          tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="chatbubbles" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="network"
+        options={{
+          title: t('network'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="people-circle" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="communities"
+        options={{
+          title: t('communities'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="people" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="projects"
+        options={{
+          title: t('projects'),
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="briefcase" size={size} color={color} />
+          ),
+        }}
+      />
+      {canModerateUser ? (
+        <Tabs.Screen
+          name="moderation"
+          options={{
+            title: t('moderation'),
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="shield-checkmark" size={size} color={color} />
+            ),
+          }}
+        />
+      ) : null}
+      <Tabs.Screen
         name="profile"
         options={{
           title: t('profile'),
-          tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
+          tabBarBadge: notificationUnreadCount > 0 ? notificationUnreadCount : undefined,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="person" size={size} color={color} />
           ),
         }}
       />
-      {user?.role === 'Super Admin' ? (
+      {canAdmin ? (
         <Tabs.Screen
           name="admin"
           options={{

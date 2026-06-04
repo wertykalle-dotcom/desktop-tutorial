@@ -1,97 +1,52 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { useApiClient } from '../../src/hooks/useApiClient';
+import { useAdminDashboardData, type AdminAdSettings, type AdminQueueItem } from '../../src/hooks/useAdminDashboardData';
 import { useI18n } from '../../src/contexts/I18nContext';
-
-type QueueItem = {
-  moderation_id: string;
-  target_type: 'post' | 'comment';
-  target_id: string;
-  user_id: string;
-  score: number;
-  status: string;
-  reason?: string | null;
-  text?: string | null;
-  created_at: string;
-};
-
-type AdSettings = {
-  in_feed_enabled: boolean;
-  in_feed_frequency: number;
-  sidebar_enabled: boolean;
-  interstitial_enabled: boolean;
-  ad_network_enabled: boolean;
-  ad_network_tag: string;
-};
-
-type ModerationSettings = {
-  sensitivity: number;
-};
-
-type AdCampaign = {
-  campaign_id: string;
-  name: string;
-  asset_url?: string | null;
-  asset_type: string;
-  targeting?: Record<string, unknown>;
-  budget: number;
-  start_at?: string | null;
-  end_at?: string | null;
-  impressions_goal?: number | null;
-  clicks_goal?: number | null;
-  placements?: string[];
-  created_at: string;
-  status: string;
-};
-
-type SystemLog = {
-  log_id: string;
-  level: string;
-  component: string;
-  message: string;
-  created_at: string;
-};
-
-type ExchangeRates = Record<string, number>;
+import { ROLE_OPTIONS, isSuperAdmin, type RoleKey } from '../../src/utils/roles';
 
 export default function AdminScreen() {
   const { user, token, updateUser } = useAuth();
   const { apiFetch } = useApiClient();
+  const {
+    loading,
+    queue,
+    systemSettings,
+    finance,
+    adSettings,
+    campaigns,
+    logs,
+    auditLogs,
+    presenceTelemetry,
+    exchangeRatesText,
+    exchangeRatesUpdatedAt,
+    systemOverview,
+    moderationSettings,
+    setAdSettings,
+    setExchangeRatesText,
+    setModerationSettings,
+    loadAdminData,
+    canAccess,
+  } = useAdminDashboardData();
   const { t, isRTL } = useI18n();
   const router = useRouter();
-  const [loading, setLoading] = useState(true);
-  const [queue, setQueue] = useState<QueueItem[]>([]);
-  const [systemSettings, setSystemSettings] = useState<any>(null);
-  const [finance, setFinance] = useState<any>(null);
-  const [adSettings, setAdSettings] = useState<AdSettings>({
-    in_feed_enabled: false,
-    in_feed_frequency: 5,
-    sidebar_enabled: false,
-    interstitial_enabled: false,
-    ad_network_enabled: false,
-    ad_network_tag: '',
+  const [auditFilter, setAuditFilter] = useState('');
+  const deletionAuditLogs = auditLogs.filter((log) => String(log.message || '').includes('user_deleted'));
+  const filteredDeletionAuditLogs = deletionAuditLogs.filter((log) => {
+    const needle = auditFilter.trim().toLowerCase();
+    if (!needle) return true;
+    return [
+      log.subject_id,
+      log.actor_id,
+      log.details,
+      log.message,
+    ].some((value) => String(value || '').toLowerCase().includes(needle));
   });
-  const [campaigns, setCampaigns] = useState<AdCampaign[]>([]);
-  const [logs, setLogs] = useState<SystemLog[]>([]);
-  const [exchangeRates, setExchangeRates] = useState<ExchangeRates>({
-    EUR: 1,
-    USD: 0.92,
-    GBP: 1.17,
-    SEK: 0.089,
-    NOK: 0.086,
-    BTC: 61000,
-    CAD: 0.68,
-    AUD: 0.61,
-    CHF: 1.04,
-    JPY: 0.0062,
-  });
-  const [exchangeRatesText, setExchangeRatesText] = useState('');
-  const [exchangeRatesUpdatedAt, setExchangeRatesUpdatedAt] = useState('');
   const [broadcastMessage, setBroadcastMessage] = useState('');
   const [targetUserId, setTargetUserId] = useState('');
-  const [targetRole, setTargetRole] = useState<'Super Admin' | 'Moderator' | 'User'>('User');
+  const [targetRole, setTargetRole] = useState<RoleKey>('user');
   const [savingRole, setSavingRole] = useState(false);
   const [campaignName, setCampaignName] = useState('');
   const [campaignAssetUrl, setCampaignAssetUrl] = useState('');
@@ -99,60 +54,41 @@ export default function AdminScreen() {
   const [campaignTargeting, setCampaignTargeting] = useState('');
   const [campaignBudget, setCampaignBudget] = useState('0');
   const [campaignPlacements, setCampaignPlacements] = useState('in_feed');
-  const [moderationSettings, setModerationSettings] = useState<ModerationSettings>({ sensitivity: 50 });
   const [nukeTargetUserId, setNukeTargetUserId] = useState('');
-
-  const ensureAdmin = useCallback(() => {
-    if (user?.role !== 'Super Admin') {
-      router.replace('/(tabs)/feed');
-      return false;
-    }
-    return true;
-  }, [router, user?.role]);
-
-  const loadAdminData = useCallback(async () => {
-    if (!token || !ensureAdmin()) return;
-    setLoading(true);
+  const exchangeRates = useMemo(() => {
     try {
-      const [settingsResp, financeResp, queueResp] = await Promise.all([
-        apiFetch('/admin/system-settings'),
-        apiFetch('/admin/finance'),
-        apiFetch('/admin/moderation-queue'),
-      ]);
-      const [adsResp, campaignsResp, logsResp] = await Promise.all([
-        apiFetch('/admin/ads/settings'),
-        apiFetch('/admin/ads/campaigns'),
-        apiFetch('/admin/logs'),
-      ]);
-      const moderationResp = await apiFetch('/admin/moderation/settings');
-      const ratesResp = await apiFetch('/admin/exchange-rates');
-      if (settingsResp?.ok) setSystemSettings(await settingsResp.json());
-      if (financeResp?.ok) setFinance(await financeResp.json());
-      if (queueResp?.ok) setQueue(await queueResp.json());
-      if (adsResp?.ok) setAdSettings(await adsResp.json());
-      if (campaignsResp?.ok) setCampaigns(await campaignsResp.json());
-      if (logsResp?.ok) setLogs(await logsResp.json());
-      if (moderationResp?.ok) setModerationSettings(await moderationResp.json());
-      if (ratesResp?.ok) {
-        const payload = await ratesResp.json();
-        const rates = payload?.rates || payload || {};
-        setExchangeRates(rates);
-        setExchangeRatesText(JSON.stringify(rates, null, 2));
-        setExchangeRatesUpdatedAt(payload?.updated_at || '');
-      }
-    } catch (error) {
-      console.error('Error loading admin data:', error);
-      Alert.alert(t('error'), t('adminLoadFailed'));
-    } finally {
-      setLoading(false);
+      return JSON.parse(exchangeRatesText || '{}') as Record<string, number>;
+    } catch {
+      return {};
     }
-  }, [apiFetch, ensureAdmin, token, t]);
+  }, [exchangeRatesText]);
+  const goToModerationCenter = () => {
+    router.push('/(tabs)/moderation');
+  };
+
+  const openQueueItem = (item: AdminQueueItem) => {
+    if (item.target_type === 'comment' && item.post_id) {
+      router.push({ pathname: '/posts/[postId]', params: { postId: item.post_id, commentId: item.target_id } });
+      return;
+    }
+    if (item.post_id || item.target_id) {
+      router.push(`/posts/${item.post_id || item.target_id}`);
+    }
+  };
 
   useFocusEffect(
     useCallback(() => {
       loadAdminData();
     }, [loadAdminData])
   );
+
+  useEffect(() => {
+    if (!token || !canAccess) return undefined;
+    const intervalId = setInterval(() => {
+      void loadAdminData();
+    }, 15000);
+    return () => clearInterval(intervalId);
+  }, [canAccess, loadAdminData, token]);
 
   const updateRole = async () => {
     if (!targetUserId.trim()) {
@@ -187,7 +123,7 @@ export default function AdminScreen() {
     }
   };
 
-  const updateAdSetting = async (next: Partial<AdSettings>) => {
+  const updateAdSetting = async (next: Partial<AdminAdSettings>) => {
     const updated = { ...adSettings, ...next };
     setAdSettings(updated);
     try {
@@ -321,7 +257,7 @@ export default function AdminScreen() {
     }
   };
 
-  if (user?.role !== 'Super Admin') {
+  if (!isSuperAdmin(user?.role)) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007AFF" />
@@ -350,7 +286,46 @@ export default function AdminScreen() {
           <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminUsers')}: {finance?.users_count ?? 0}</Text>
           <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPosts')}: {finance?.posts_count ?? 0}</Text>
           <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminModerationItems')}: {finance?.moderation_queue_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>Payment intents: {finance?.payment_intents_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>Wallet total: {Number(finance?.wallet_balance_total ?? 0).toFixed(2)} EUR</Text>
           <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminAdRevenue')}: {finance?.ad_revenue_eur ?? 0}</Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>{t('adminSystemOverview')}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminComments')}: {systemOverview?.comments_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminLikes')}: {systemOverview?.likes_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminNotifications')}: {systemOverview?.notifications_total ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminUnread')}: {systemOverview?.unread_notifications_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminCampaignsCount')}: {systemOverview?.campaigns_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminAdsEnabled')}: {systemOverview?.ads_enabled_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminSystemLogs')}: {systemOverview?.system_logs_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminAuditLogs')}: {systemOverview?.audit_logs_count ?? 0}</Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>{t('adminPresenceTelemetry')}</Text>
+          <View style={styles.healthRow}>
+            <View style={styles.healthPill}>
+              <Text style={styles.healthPillLabel}>{t('adminPresenceOnline')}</Text>
+              <Text style={styles.healthPillValue}>{presenceTelemetry?.online_users_rows ?? 0}</Text>
+            </View>
+            <View style={styles.healthPill}>
+              <Text style={styles.healthPillLabel}>{t('adminPresenceActive')}</Text>
+              <Text style={styles.healthPillValue}>{presenceTelemetry?.active_typing_rows ?? 0}</Text>
+            </View>
+            <View style={styles.healthPill}>
+              <Text style={styles.healthPillLabel}>{t('adminPresenceStale')}</Text>
+              <Text style={styles.healthPillValue}>{presenceTelemetry?.stale_presence_rows_estimate ?? 0}</Text>
+            </View>
+          </View>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPresenceStorage')}: {presenceTelemetry?.storage || t('adminNoData')}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPresenceTotal')}: {presenceTelemetry?.total_presence_rows ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPresenceActive')}: {presenceTelemetry?.active_typing_rows ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPresenceOnline')}: {presenceTelemetry?.online_users_rows ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPresenceStale')}: {presenceTelemetry?.stale_presence_rows_estimate ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPresenceTtl')}: {presenceTelemetry?.ttl_seconds ?? 0}s</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPresenceOnlineTtl')}: {presenceTelemetry?.online_ttl_seconds ?? 0}s</Text>
         </View>
 
         <View style={styles.card}>
@@ -363,14 +338,14 @@ export default function AdminScreen() {
             autoCapitalize="none"
           />
           <View style={[styles.roleRow, isRTL && styles.rowReverseWrap]}>
-            {(['User', 'Moderator', 'Super Admin'] as const).map((role) => (
+            {ROLE_OPTIONS.map((role) => (
               <TouchableOpacity
                 key={role}
                 style={[styles.roleButton, targetRole === role && styles.roleButtonActive]}
                 onPress={() => setTargetRole(role)}
               >
                 <Text style={[styles.roleButtonText, targetRole === role && styles.roleButtonTextActive]}>
-                  {role === 'User' ? t('adminRoleUser') : role === 'Moderator' ? t('adminRoleModerator') : t('adminRoleSuperAdmin')}
+                  {role === 'user' ? t('adminRoleUser') : role === 'moderator' ? t('adminRoleModerator') : t('adminRoleSuperAdmin')}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -382,6 +357,9 @@ export default function AdminScreen() {
 
         <View style={styles.card}>
           <Text style={styles.cardTitle}>{t('adminModerationQueue')}</Text>
+          <TouchableOpacity style={[styles.primaryButton, { marginBottom: 12 }]} onPress={goToModerationCenter}>
+            <Text style={styles.primaryButtonText}>{t('moderation')}</Text>
+          </TouchableOpacity>
           {queue.length === 0 ? (
             <Text style={styles.empty}>{t('adminNoQueue')}</Text>
           ) : (
@@ -393,6 +371,9 @@ export default function AdminScreen() {
                 <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminStatus')}: {item.status}</Text>
                 <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminReason')}: {item.reason || t('adminNoData')}</Text>
                 <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminText')}: {item.text || t('adminNoData')}</Text>
+                <TouchableOpacity style={[styles.secondaryButton, { marginTop: 8 }]} onPress={() => openQueueItem(item)}>
+                  <Text style={styles.secondaryButtonText}>{t('moderationOpenOriginal')}</Text>
+                </TouchableOpacity>
               </View>
             ))
           )}
@@ -566,6 +547,30 @@ export default function AdminScreen() {
             ))
           )}
         </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Audit logs</Text>
+          <TextInput
+            style={styles.input}
+            value={auditFilter}
+            onChangeText={setAuditFilter}
+            placeholder="Filter by user_id / actor_id"
+            autoCapitalize="none"
+          />
+          {filteredDeletionAuditLogs.length === 0 ? (
+            <Text style={styles.empty}>{t('adminNoLogs')}</Text>
+          ) : (
+            filteredDeletionAuditLogs.map((log) => (
+              <View key={log.log_id} style={styles.queueItem}>
+                <Text style={[styles.queueTitle, isRTL && styles.textRight]}>{log.message}</Text>
+                <Text style={[styles.meta, isRTL && styles.textRight]}>{log.level} · {log.created_at}</Text>
+                {log.subject_id ? <Text style={[styles.meta, isRTL && styles.textRight]}>subject: {log.subject_id}</Text> : null}
+                {log.actor_id ? <Text style={[styles.meta, isRTL && styles.textRight]}>actor: {log.actor_id}</Text> : null}
+                {log.details ? <Text style={[styles.meta, isRTL && styles.textRight]}>details: {log.details}</Text> : null}
+              </View>
+            ))
+          )}
+        </View>
       </ScrollView>
     </View>
   );
@@ -604,14 +609,27 @@ const styles = StyleSheet.create({
   roleButtonActive: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
   roleButtonText: { color: '#374151', fontWeight: '700' },
   roleButtonTextActive: { color: '#fff' },
+  healthRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginBottom: 10 },
+  healthPill: { minWidth: 92, flexGrow: 1, borderRadius: 14, borderWidth: 1, borderColor: '#e5e7eb', backgroundColor: '#f8fafc', paddingVertical: 8, paddingHorizontal: 10 },
+  healthPillLabel: { fontSize: 11, color: '#6b7280', fontWeight: '700' },
+  healthPillValue: { fontSize: 18, color: '#111827', fontWeight: '800', marginTop: 2 },
   primaryButton: {
     backgroundColor: '#111827',
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
   },
+  secondaryButton: {
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    backgroundColor: '#fff',
+  },
   rowReverse: { flexDirection: 'row-reverse' },
   primaryButtonText: { color: '#fff', fontWeight: '800' },
+  secondaryButtonText: { color: '#111827', fontWeight: '800' },
   queueItem: { borderTopWidth: 1, borderTopColor: '#eef2f7', paddingTop: 10, gap: 4 },
   queueTitle: { fontWeight: '800', color: '#111827' },
   toggle: {

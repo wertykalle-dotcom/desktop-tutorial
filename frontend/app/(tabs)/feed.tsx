@@ -65,6 +65,7 @@ function FeedScreen() {
   const [editingCommentIdByPost, setEditingCommentIdByPost] = useState<Record<string, string | null>>({});
   const [editingCommentTextById, setEditingCommentTextById] = useState<Record<string, string>>({});
   const [likeLoadingByPost, setLikeLoadingByPost] = useState<Record<string, boolean>>({});
+  const [repostLoadingByPost, setRepostLoadingByPost] = useState<Record<string, boolean>>({});
   const [commentLoadingByPost, setCommentLoadingByPost] = useState<Record<string, boolean>>({});
   const [followingByUserId, setFollowingByUserId] = useState<Record<string, boolean>>({});
   const [followLoadingByUserId, setFollowLoadingByUserId] = useState<Record<string, boolean>>({});
@@ -87,12 +88,35 @@ function FeedScreen() {
   const activePostStartRef = useRef<Record<string, number>>({});
   const visiblePostIdsRef = useRef<Set<string>>(new Set());
   const dwellFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendDwellEventRef = useRef<(postId: string, dwellMs: number) => Promise<void>>(async () => {});
+  const flushVisibleDwellRef = useRef<() => Promise<void>>(async () => {});
   const isNewUser = (user?.posts_count ?? 0) < 3 && (user?.followers_count ?? 0) === 0 && (user?.following_count ?? 0) <= 2;
 
   const resolveMediaUrl = (uri?: string) => {
     if (!uri) return undefined;
     if (/^https?:\/\//i.test(uri)) return uri;
     return `${BACKEND_BASE}${uri.startsWith('/') ? uri : `/${uri}`}`;
+  };
+
+  const handleRepost = async (post: LocalPost) => {
+    if (repostLoadingByPost[post.post_id]) return;
+    setRepostLoadingByPost((prev) => ({ ...prev, [post.post_id]: true }));
+    try {
+      const response = await apiFetch(`/posts/${post.post_id}/repost`, {
+        method: 'POST',
+      });
+      if (!response || response.status === 401) return;
+      if (!response.ok) {
+        const raw = await response.text();
+        throw new Error(`Repost failed (${response.status}): ${raw}`);
+      }
+      await fetchFeed();
+    } catch (error) {
+      console.error('Error reposting post:', error);
+      Alert.alert(t('error'), t('feedRepostFailed'));
+    } finally {
+      setRepostLoadingByPost((prev) => ({ ...prev, [post.post_id]: false }));
+    }
   };
 
   const fetchFeed = useCallback(async () => {
@@ -182,6 +206,14 @@ function FeedScreen() {
   }, [fetchFeed]);
 
   useEffect(() => {
+    if (!token) return undefined;
+    const intervalId = setInterval(() => {
+      void fetchFeed();
+    }, 15000);
+    return () => clearInterval(intervalId);
+  }, [fetchFeed, token]);
+
+  useEffect(() => {
     if (highlightPostId && followingOnly) {
       setFollowingOnly(false);
     }
@@ -225,6 +257,10 @@ function FeedScreen() {
     }
   }, [apiFetch, token]);
 
+  useEffect(() => {
+    sendDwellEventRef.current = sendDwellEvent;
+  }, [sendDwellEvent]);
+
   const flushVisibleDwell = useCallback(async () => {
     const now = Date.now();
     const payloads = buildDwellEvents(
@@ -240,6 +276,10 @@ function FeedScreen() {
     }
   }, [sendDwellEvent]);
 
+  useEffect(() => {
+    flushVisibleDwellRef.current = flushVisibleDwell;
+  }, [flushVisibleDwell]);
+
   const onViewableItemsChanged = useCallback(({ viewableItems }: { viewableItems: { item: FeedItem; isViewable: boolean }[] }) => {
     const now = Date.now();
     const nextVisibleIds = getVisiblePostIds(viewableItems);
@@ -252,24 +292,24 @@ function FeedScreen() {
     visiblePostIdsRef.current = nextVisibleIds;
     activePostStartRef.current = nextActiveStarts;
     for (const event of events) {
-      void sendDwellEvent(event.postId, event.dwellMs);
+      void sendDwellEventRef.current(event.postId, event.dwellMs);
     }
     if (dwellFlushTimerRef.current) {
       clearTimeout(dwellFlushTimerRef.current);
     }
     dwellFlushTimerRef.current = setTimeout(() => {
-      void flushVisibleDwell();
+      void flushVisibleDwellRef.current();
     }, 1500);
-  }, [flushVisibleDwell, sendDwellEvent]);
+  }, []);
 
   useEffect(() => {
     return () => {
       if (dwellFlushTimerRef.current) {
         clearTimeout(dwellFlushTimerRef.current);
       }
-      void flushVisibleDwell();
+      void flushVisibleDwellRef.current();
     };
-  }, [flushVisibleDwell]);
+  }, []);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -651,16 +691,19 @@ function FeedScreen() {
     >
       <View style={[styles.postHeader, isRTL && styles.rowReverse]}>
         <View style={[styles.userInfo, isRTL && styles.rowReverse]}>
-          {item.profile_picture ? (
-            <Image
-              source={{ uri: resolveMediaUrl(item.profile_picture) }}
-              style={styles.avatar}
-            />
-          ) : (
-            <View style={[styles.avatar, styles.avatarPlaceholder]}>
-              <Ionicons name="person" size={24} color="#fff" />
-            </View>
-          )}
+          <View style={styles.avatarWrap}>
+            {item.profile_picture ? (
+              <Image
+                source={{ uri: resolveMediaUrl(item.profile_picture) }}
+                style={[styles.avatar, (item as { is_online?: boolean }).is_online ? styles.avatarOnline : null]}
+              />
+            ) : (
+              <View style={[styles.avatar, styles.avatarPlaceholder, (item as { is_online?: boolean }).is_online ? styles.avatarOnline : null]}>
+                <Ionicons name="person" size={24} color="#fff" />
+              </View>
+            )}
+            {(item as { is_online?: boolean }).is_online ? <View style={styles.avatarHalo} /> : null}
+          </View>
           <View>
             <Text style={styles.username}>{item.username}</Text>
             <Text style={styles.timestamp}>
@@ -725,6 +768,13 @@ function FeedScreen() {
       </View>
 
       <Text style={[styles.postText, isRTL && styles.textRight]}>{item.text}</Text>
+      {item.moderation_status ? (
+        <View style={styles.moderationBadge}>
+          <Text style={styles.moderationBadgeText}>
+            {item.moderation_status === 'queued' ? t('moderationQueued') : item.moderation_status}
+          </Text>
+        </View>
+      ) : null}
 
       {item.image && (
         <View style={styles.postImageWrap}>
@@ -772,6 +822,19 @@ function FeedScreen() {
           <Ionicons name="chatbubble-outline" size={22} color="#666" />
           <Text style={[styles.actionText, isRTL && styles.actionTextRTL]}>{item.comments_count || 0}</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
+          onPress={() => handleRepost(item)}
+          disabled={repostLoadingByPost[item.post_id]}
+        >
+          {repostLoadingByPost[item.post_id] ? (
+            <ActivityIndicator size="small" color="#666" />
+          ) : (
+            <Ionicons name="repeat" size={22} color={item.repost_post_id ? '#0F62FE' : '#666'} />
+          )}
+          <Text style={[styles.actionText, isRTL && styles.actionTextRTL]}>{item.repost_count || 0}</Text>
+        </TouchableOpacity>
       </View>
 
       {expandedComments[item.post_id] && (
@@ -780,10 +843,14 @@ function FeedScreen() {
             (item.comments || []).map((comment) => {
               const isOwnComment = user?.user_id === comment.user_id;
               const isEditing = editingCommentIdByPost[item.post_id] === comment.comment_id;
+              const isOnline = Boolean((comment as { is_online?: boolean }).is_online);
               return (
                 <View key={comment.comment_id} style={styles.commentRow}>
                   <View style={[styles.commentTopRow, isRTL && styles.rowReverse]}>
-                    <Text style={[styles.commentAuthor, isRTL && styles.textRight]}>{comment.username}</Text>
+                    <View style={styles.commentAuthorWrap}>
+                      <Text style={[styles.commentAuthor, isRTL && styles.textRight]}>{comment.username}</Text>
+                      {isOnline ? <View style={styles.commentPresenceDot} /> : null}
+                    </View>
                     {isOwnComment && !isEditing && (
                       <View style={[styles.commentActionRow, isRTL && styles.rowReverse]}>
                         <TouchableOpacity onPress={() => startEditComment(item.post_id, comment)}>
@@ -1200,11 +1267,28 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
   },
+  avatarWrap: {
+    position: 'relative',
+    marginRight: 12,
+  },
   avatar: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    marginRight: 12,
+  },
+  avatarOnline: {
+    borderWidth: 2,
+    borderColor: '#10b981',
+  },
+  avatarHalo: {
+    position: 'absolute',
+    top: -4,
+    left: -4,
+    right: -4,
+    bottom: -4,
+    borderRadius: 26,
+    borderWidth: 2,
+    borderColor: 'rgba(16, 185, 129, 0.28)',
   },
   avatarPlaceholder: {
     backgroundColor: '#007AFF',
@@ -1317,6 +1401,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#222',
   },
+  commentAuthorWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  commentPresenceDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: '#10b981',
+  },
   commentActionRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1329,6 +1424,19 @@ const styles = StyleSheet.create({
   },
   commentDeleteText: {
     color: '#D14343',
+  },
+  moderationBadge: {
+    alignSelf: 'flex-start',
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: '#fef3c7',
+  },
+  moderationBadgeText: {
+    color: '#92400e',
+    fontWeight: '800',
+    fontSize: 12,
   },
   commentText: {
     fontSize: 14,

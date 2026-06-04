@@ -4,7 +4,7 @@ export const RTL_LOCALES: LocaleKey[] = ['ar', 'he'];
 
 export const SUPPORTED_LOCALES: LocaleKey[] = ['en', 'fi', 'ar', 'he'];
 
-export const FALLBACK_LOCALE: LocaleKey = 'en';
+export const FALLBACK_LOCALE: LocaleKey = 'fi';
 
 export const LOCALE_STORAGE_KEY = 'app_locale';
 

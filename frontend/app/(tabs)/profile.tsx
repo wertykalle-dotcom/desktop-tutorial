@@ -21,6 +21,7 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { extractApiErrorMessage } from '../../src/utils/api/http';
+import { formatRelativeTime } from '../../src/utils/time';
 import { localeLabels, SUPPORTED_LOCALES } from '../../src/i18n/locales';
 import {
   BIO_WARNING_THRESHOLD,
@@ -51,6 +52,7 @@ export default function ProfileScreen() {
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
   const [unreadNotifications, setUnreadNotifications] = useState(0);
   const [stats, setStats] = useState(normalizeProfileStats(user));
+  const [lastActiveAt, setLastActiveAt] = useState<string | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -94,6 +96,12 @@ export default function ProfileScreen() {
       if (unreadResp.ok) {
         const payload = await unreadResp.json();
         setUnreadNotifications(Number(payload?.unread_count ?? 0));
+      }
+
+      const presenceResp = await apiFetch('/users/me/presence');
+      if (presenceResp?.ok) {
+        const presence = await presenceResp.json();
+        setLastActiveAt(presence?.last_active_at || null);
       }
     } catch (error) {
       console.error('Error refreshing profile stats:', error);
@@ -323,6 +331,7 @@ export default function ProfileScreen() {
           ) : null}
 
           <View style={styles.avatarContainer}>
+            <View style={styles.avatarHalo} />
             {profilePicture ? (
               <Image source={{ uri: profilePicture }} style={styles.avatar} />
             ) : (
@@ -330,6 +339,8 @@ export default function ProfileScreen() {
                 <Ionicons name="person" size={60} color="#fff" />
               </View>
             )}
+            <View style={styles.avatarPresenceDot} />
+            {lastActiveAt ? <Text style={styles.lastActiveText}>{t('profileLastActive')}: {formatRelativeTime(lastActiveAt)}</Text> : null}
             {editing && (
               <TouchableOpacity
                 style={[styles.changePhotoButton, isBusy && styles.buttonDisabled]}
@@ -665,11 +676,39 @@ const styles = StyleSheet.create({
     position: 'relative',
     marginBottom: 16,
   },
+  avatarHalo: {
+    position: 'absolute',
+    top: -6,
+    left: -6,
+    right: -6,
+    bottom: -6,
+    borderRadius: 66,
+    borderWidth: 2,
+    borderColor: 'rgba(16, 185, 129, 0.22)',
+  },
   avatar: {
     width: 120,
     height: 120,
     borderRadius: 60,
     backgroundColor: '#e0e0e0',
+  },
+  avatarPresenceDot: {
+    position: 'absolute',
+    right: 10,
+    bottom: 10,
+    width: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: '#10b981',
+    borderWidth: 3,
+    borderColor: '#fff',
+  },
+  lastActiveText: {
+    marginTop: 8,
+    alignSelf: 'center',
+    fontSize: 11,
+    color: '#6b7280',
+    fontWeight: '600',
   },
   avatarPlaceholder: {
     backgroundColor: '#007AFF',

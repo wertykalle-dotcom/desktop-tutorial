@@ -1,19 +1,32 @@
-import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator, Alert, Image, RefreshControl } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../src/contexts/AuthContext';
 import { useApiClient } from '../src/hooks/useApiClient';
+import { apiUrl } from '../src/utils/api/http';
 import { formatRelativeTime, formatLocalDateTime } from '../src/utils/time';
 import { useI18n } from '../src/contexts/I18nContext';
 
 type NotificationItem = {
   notification_id: string;
   actor_username: string;
+  actor_profile_picture?: string | null;
   type: 'post_like' | 'post_comment' | 'user_follow' | string;
   post_id?: string | null;
+  comment_id?: string | null;
   created_at: string;
   is_read?: boolean;
+};
+
+type NotificationFilter = 'all' | 'unread';
+type NotificationTone = 'brand' | 'success' | 'warning' | 'muted';
+
+const notificationToneStyles: Record<NotificationTone, { backgroundColor: string; color: string }> = {
+  brand: { backgroundColor: '#EFF6FF', color: '#0F62FE' },
+  success: { backgroundColor: '#ECFDF5', color: '#0F766E' },
+  warning: { backgroundColor: '#FFFBEB', color: '#B45309' },
+  muted: { backgroundColor: '#F8FAFC', color: '#64748B' },
 };
 
 function NotificationsScreen() {
@@ -23,6 +36,7 @@ function NotificationsScreen() {
   const router = useRouter();
   const [items, setItems] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(false);
+  const [filter, setFilter] = useState<NotificationFilter>('all');
   const isNewAccount = (user?.posts_count ?? 0) < 3 && (user?.followers_count ?? 0) === 0 && (user?.following_count ?? 0) <= 2;
 
   const loadNotifications = useCallback(async () => {
@@ -49,17 +63,56 @@ function NotificationsScreen() {
     }
   }, [token, apiFetch, t]);
 
+  const filteredItems = useMemo(
+    () => items.filter((item) => filter === 'unread' ? !item.is_read : true),
+    [filter, items],
+  );
+
   useFocusEffect(
     useCallback(() => {
       loadNotifications();
     }, [loadNotifications])
   );
 
+  useEffect(() => {
+    if (!token) return undefined;
+    const intervalId = setInterval(() => {
+      void loadNotifications();
+    }, 15000);
+    return () => clearInterval(intervalId);
+  }, [loadNotifications, token]);
+
   const renderMessage = (item: NotificationItem) => {
     if (item.type === 'post_like') return `@${item.actor_username} tykkäsi julkaisustasi`;
     if (item.type === 'post_comment') return `@${item.actor_username} kommentoi julkaisua`;
     if (item.type === 'user_follow') return `@${item.actor_username} alkoi seurata sinua`;
     return `@${item.actor_username} teki uuden toiminnon`;
+  };
+
+  const renderDescription = (item: NotificationItem) => {
+    if (item.type === 'post_like') return t('notificationsLikeHint');
+    if (item.type === 'post_comment') return t('notificationsCommentHint');
+    if (item.type === 'user_follow') return t('notificationsFollowHint');
+    return t('notificationsGenericHint');
+  };
+
+  const resolveAvatarUrl = (avatarUrl?: string | null) => {
+    if (!avatarUrl) return null;
+    return avatarUrl.startsWith('/') ? apiUrl(avatarUrl) : avatarUrl;
+  };
+
+  const getTypeTone = (item: NotificationItem): NotificationTone => {
+    if (item.type === 'post_like') return 'brand';
+    if (item.type === 'post_comment') return 'success';
+    if (item.type === 'user_follow') return 'warning';
+    return 'muted';
+  };
+
+  const getTypeIcon = (item: NotificationItem) => {
+    if (item.type === 'post_like') return 'heart';
+    if (item.type === 'post_comment') return 'chatbubble';
+    if (item.type === 'user_follow') return 'person-add';
+    return 'notifications';
   };
 
   const openNotification = async (item: NotificationItem) => {
@@ -101,6 +154,8 @@ function NotificationsScreen() {
     }
   };
 
+  const unreadCount = items.filter((item) => !item.is_read).length;
+
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -114,7 +169,22 @@ function NotificationsScreen() {
         </TouchableOpacity>
       </View>
 
-      <ScrollView contentContainerStyle={styles.content}>
+      <View style={styles.filterRow}>
+        <TouchableOpacity style={[styles.filterChip, filter === 'all' && styles.filterChipActive]} onPress={() => setFilter('all')}>
+          <Text style={[styles.filterText, filter === 'all' && styles.filterTextActive]}>{t('all')}</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.filterChip, filter === 'unread' && styles.filterChipActive]} onPress={() => setFilter('unread')}>
+          <Text style={[styles.filterText, filter === 'unread' && styles.filterTextActive]}>{t('unread')}</Text>
+        </TouchableOpacity>
+        <View style={styles.countPill}>
+          <Text style={styles.countPillText}>{unreadCount}</Text>
+        </View>
+      </View>
+
+      <ScrollView
+        contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={loading} onRefresh={loadNotifications} />}
+      >
         <View style={[styles.personaCard, isNewAccount ? styles.personaCardExplore : styles.personaCardPersonal]}>
           <Text style={styles.personaLabel}>
             {isNewAccount ? t('notificationsExploreModeLabel') : t('notificationsPersonalModeLabel')}
@@ -130,17 +200,45 @@ function NotificationsScreen() {
           <ActivityIndicator size="small" color="#007AFF" />
         ) : items.length === 0 ? (
           <Text style={styles.empty}>{t('noNotifications')}</Text>
+        ) : filteredItems.length === 0 ? (
+          <Text style={styles.empty}>{filter === 'unread' ? t('notificationsNoUnread') : t('noNotifications')}</Text>
         ) : (
-          items.map((item) => (
-              <TouchableOpacity
-                key={item.notification_id}
-                style={[styles.card, !item.is_read && styles.unreadCard]}
-                onPress={() => openNotification(item)}
-              >
-              <Text style={styles.message}>{renderMessage(item)}</Text>
-              <Text style={styles.date}>
-                {formatRelativeTime(item.created_at) || formatLocalDateTime(item.created_at)}
-              </Text>
+          filteredItems.map((item) => (
+            <TouchableOpacity
+              key={item.notification_id}
+              style={[styles.card, !item.is_read && styles.unreadCard]}
+              onPress={() => openNotification(item)}
+            >
+              <View style={styles.cardHeader}>
+                {resolveAvatarUrl(item.actor_profile_picture) ? (
+                  <Image source={{ uri: resolveAvatarUrl(item.actor_profile_picture) || undefined }} style={styles.avatar} />
+                ) : (
+                  <View style={[styles.avatar, styles.avatarFallback]}>
+                    <Ionicons name={getTypeIcon(item)} size={14} color="#fff" />
+                  </View>
+                )}
+                <View style={styles.cardHeaderText}>
+                  <Text style={styles.message}>{renderMessage(item)}</Text>
+                  <Text style={styles.description}>{renderDescription(item)}</Text>
+                </View>
+                <View style={styles.badgeWrap}>
+                  <Text
+                    style={[
+                      styles.typeBadge,
+                      {
+                        backgroundColor: notificationToneStyles[getTypeTone(item)].backgroundColor,
+                        color: notificationToneStyles[getTypeTone(item)].color,
+                      },
+                    ]}
+                  >
+                    {t(`notificationType_${item.type}`) || item.type}
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.cardFooter}>
+                <Text style={styles.date}>{formatRelativeTime(item.created_at) || formatLocalDateTime(item.created_at)}</Text>
+                {item.is_read ? <Text style={styles.readState}>{t('read')}</Text> : <Text style={styles.unreadState}>{t('unread')}</Text>}
+              </View>
             </TouchableOpacity>
           ))
         )}
@@ -198,6 +296,46 @@ const styles = StyleSheet.create({
     padding: 16,
     gap: 10,
   },
+  filterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 999,
+    backgroundColor: '#EEF2FF',
+  },
+  filterChipActive: {
+    backgroundColor: '#0F62FE',
+  },
+  filterText: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#334155',
+  },
+  filterTextActive: {
+    color: '#fff',
+  },
+  countPill: {
+    minWidth: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 'auto',
+    paddingHorizontal: 8,
+  },
+  countPillText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
+  },
   personaCard: {
     borderRadius: 16,
     borderWidth: 1,
@@ -241,6 +379,63 @@ const styles = StyleSheet.create({
     borderColor: '#ececec',
     padding: 12,
   },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  cardHeaderText: {
+    flex: 1,
+  },
+  badgeWrap: {
+    alignItems: 'flex-end',
+  },
+  avatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#dbeafe',
+  },
+  avatarFallback: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#007AFF',
+  },
+  description: {
+    marginTop: 2,
+    fontSize: 12,
+    color: '#64748B',
+  },
+  typeBadge: {
+    fontSize: 10,
+    fontWeight: '900',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    overflow: 'hidden',
+  },
+  typeBadge_brand: {
+    backgroundColor: '#EFF6FF',
+    color: '#0F62FE',
+  },
+  typeBadge_success: {
+    backgroundColor: '#ECFDF5',
+    color: '#0F766E',
+  },
+  typeBadge_warning: {
+    backgroundColor: '#FFFBEB',
+    color: '#B45309',
+  },
+  typeBadge_muted: {
+    backgroundColor: '#F8FAFC',
+    color: '#64748B',
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+  },
   unreadCard: {
     borderColor: '#007AFF',
     backgroundColor: '#f0f7ff',
@@ -251,8 +446,17 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   date: {
-    marginTop: 4,
     fontSize: 12,
     color: '#777',
+  },
+  readState: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#64748B',
+  },
+  unreadState: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#0F62FE',
   },
 });

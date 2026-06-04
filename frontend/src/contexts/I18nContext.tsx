@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useState, ReactNode } from 'react';
 import { I18nManager, Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import { I18n } from 'i18n-js';
 import { apiUrl } from '../utils/api/http';
 import {
   FALLBACK_LOCALE,
@@ -21,6 +22,9 @@ const loadLocaleMessages = (): LocaleMessages => ({
 });
 
 const localeMessages = loadLocaleMessages();
+const i18n = new I18n(localeMessages);
+i18n.enableFallback = true;
+i18n.defaultLocale = FALLBACK_LOCALE;
 
 type I18nContextType = {
   locale: LocaleKey;
@@ -109,14 +113,15 @@ export const I18nProvider = ({ children }: { children: ReactNode }) => {
 
   useEffect(() => {
     const cancelledRef = { current: false };
-    if (typeof initializeLocale === 'function') {
-      void initializeLocale(cancelledRef);
-    }
-
+    void initializeLocale(cancelledRef);
     return () => {
       cancelledRef.current = true;
     };
   }, []);
+
+  useEffect(() => {
+    i18n.locale = locale;
+  }, [locale]);
 
   useEffect(() => {
     const shouldRTL = RTL_LOCALES.includes(locale);
@@ -142,7 +147,7 @@ export const I18nProvider = ({ children }: { children: ReactNode }) => {
       locale,
       isRTL: RTL_LOCALES.includes(locale),
       setLocale,
-      t: (key: string) => localeMessages[locale]?.[key] || localeMessages[FALLBACK_LOCALE][key] || key,
+      t: (key: string) => String(i18n.t(key)),
       isReady,
     }),
     [locale, isReady]
