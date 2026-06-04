@@ -193,6 +193,8 @@
   "adminRoleUser": "User",
   "adminRoleModerator": "Moderator",
   "adminRoleSuperAdmin": "Super Admin",
+  "adminAccessDeniedTitle": "Access denied",
+  "adminAccessDeniedBody": "This view is only available to admin roles.",
   "adminUpdateRole": "Update role",
   "adminUserIdPlaceholder": "User user_id",
   "adminSensitivityPlaceholder": "0-100",

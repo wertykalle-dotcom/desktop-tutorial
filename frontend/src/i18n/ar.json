@@ -133,6 +133,8 @@
   "adminRoleUser": "مستخدم",
   "adminRoleModerator": "مشرف",
   "adminRoleSuperAdmin": "مشرف أعلى",
+  "adminAccessDeniedTitle": "تم رفض الوصول",
+  "adminAccessDeniedBody": "هذه الصفحة متاحة فقط لأدوار الإدارة.",
   "adminUpdateRole": "تحديث الدور",
   "adminUserIdPlaceholder": "user_id للمستخدم",
   "adminSensitivityPlaceholder": "0-100",

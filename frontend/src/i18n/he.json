@@ -133,6 +133,8 @@
   "adminRoleUser": "משתמש",
   "adminRoleModerator": "מנהל",
   "adminRoleSuperAdmin": "Super Admin",
+  "adminAccessDeniedTitle": "הגישה נדחתה",
+  "adminAccessDeniedBody": "תצוגה זו זמינה רק לתפקידי ניהול.",
   "adminUpdateRole": "עדכן תפקיד",
   "adminUserIdPlaceholder": "user_id של משתמש",
   "adminSensitivityPlaceholder": "0-100",

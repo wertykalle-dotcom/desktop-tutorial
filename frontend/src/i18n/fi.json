@@ -193,6 +193,8 @@
   "adminRoleUser": "User",
   "adminRoleModerator": "Moderator",
   "adminRoleSuperAdmin": "Super Admin",
+  "adminAccessDeniedTitle": "Ei käyttöoikeutta",
+  "adminAccessDeniedBody": "Tämä näkymä kuuluu vain ylläpitäjärooleille.",
   "adminUpdateRole": "Päivitä rooli",
   "adminUserIdPlaceholder": "Käyttäjän user_id",
   "adminSensitivityPlaceholder": "0-100",
