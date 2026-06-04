@@ -7,6 +7,7 @@ import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { hasCompletedOnboarding, isNewUserProfile } from '../../src/utils/onboarding';
+import { canModerate, isSuperAdmin } from '../../src/utils/roles';
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
@@ -18,6 +19,8 @@ export default function TabsLayout() {
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const [onboardingReady, setOnboardingReady] = useState(false);
   const [hasOnboarded, setHasOnboarded] = useState(true);
+  const canSeeModerationTabs = canModerate(user?.role);
+  const canSeeProjectsTab = isSuperAdmin(user?.role);
 
   useEffect(() => {
     const resolveOnboarding = async () => {
@@ -121,12 +124,12 @@ export default function TabsLayout() {
           fontWeight: 'bold',
         },
       }}
-    >
-      <Tabs.Screen
-        name="onboarding"
-        options={{
-          href: null,
-        }}
+      >
+        <Tabs.Screen
+          name="onboarding"
+          options={{
+            href: null,
+          }}
       />
       <Tabs.Screen
         name="feed"
@@ -168,6 +171,7 @@ export default function TabsLayout() {
         name="messages"
         options={{
           title: t('messages'),
+          tabBarLabel: t('messages'),
           tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubble-ellipses" size={size} color={color} />
@@ -192,6 +196,39 @@ export default function TabsLayout() {
           ),
         }}
       />
+      {canSeeModerationTabs ? (
+        <Tabs.Screen
+          name="moderation"
+          options={{
+            title: t('moderation'),
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="shield-checkmark" size={size} color={color} />
+            ),
+          }}
+        />
+      ) : null}
+      {canSeeProjectsTab ? (
+        <Tabs.Screen
+          name="projects"
+          options={{
+            title: t('projects'),
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="briefcase" size={size} color={color} />
+            ),
+          }}
+        />
+      ) : null}
+      {canSeeModerationTabs ? (
+        <Tabs.Screen
+          name="admin"
+          options={{
+            title: t('admin'),
+            tabBarIcon: ({ color, size }) => (
+              <Ionicons name="settings" size={size} color={color} />
+            ),
+          }}
+        />
+      ) : null}
       <Tabs.Screen
         name="profile"
         options={{

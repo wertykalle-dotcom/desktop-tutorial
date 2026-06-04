@@ -62,6 +62,7 @@ export default function AdminScreen() {
       return {};
     }
   }, [exchangeRatesText]);
+  const canAccess = isSuperAdmin(user?.role);
   const goToModerationCenter = () => {
     router.push('/(tabs)/moderation');
   };
@@ -78,8 +79,12 @@ export default function AdminScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (!canAccess) {
+        router.replace('/(tabs)/feed');
+        return undefined;
+      }
       loadAdminData();
-    }, [loadAdminData])
+    }, [canAccess, loadAdminData, router])
   );
 
   useEffect(() => {
@@ -89,6 +94,14 @@ export default function AdminScreen() {
     }, 15000);
     return () => clearInterval(intervalId);
   }, [canAccess, loadAdminData, token]);
+
+  if (!canAccess) {
+    return (
+      <View style={styles.center}>
+        <ActivityIndicator size="large" color="#007AFF" />
+      </View>
+    );
+  }
 
   const updateRole = async () => {
     if (!targetUserId.trim()) {

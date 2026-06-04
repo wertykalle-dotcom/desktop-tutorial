@@ -210,6 +210,7 @@ export default function ModerationScreen() {
   }, [canAccess, loadData, token]);
 
   if (!canAccess) {
+    router.replace('/(tabs)/feed');
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#007AFF" />
