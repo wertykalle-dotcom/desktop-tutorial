@@ -4,10 +4,24 @@ const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
 const resolveBackendBaseUrl = () => {
   const rawEnvUrl = EXPO_PUBLIC_API_BASE_URL || EXPO_PUBLIC_BACKEND_URL;
   const envUrl = rawEnvUrl.replace(/\/+$/, '').replace(/\/api$/, '');
-  if (envUrl) return envUrl;
   if (typeof window !== 'undefined' && window.location?.origin) {
-    return window.location.origin;
+    const browserOrigin = window.location.origin;
+    const browserBackendOrigin = browserOrigin
+      .replace(/:8084$/, ':8000')
+      .replace(/-8084(\.app\.github\.dev)$/, '-8000$1');
+
+    if (
+      !envUrl ||
+      envUrl.includes('localhost') ||
+      envUrl.includes('127.0.0.1')
+    ) {
+      return browserBackendOrigin;
+    }
+
+    return envUrl;
   }
+
+  if (envUrl) return envUrl;
   return 'http://127.0.0.1:8000';
 };
 
