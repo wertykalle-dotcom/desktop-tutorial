@@ -268,7 +268,7 @@ export default function AdminScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>{t('adminTitle')}</Text>
+        <Text style={styles.title}>{t('dashboard')}</Text>
         <Text style={styles.subtitle}>{t('adminSubtitle')}</Text>
       </View>
 

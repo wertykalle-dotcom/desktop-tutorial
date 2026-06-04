@@ -6,12 +6,7 @@ const resolveBackendBaseUrl = () => {
   const envUrl = rawEnvUrl.replace(/\/+$/, '').replace(/\/api$/, '');
   if (envUrl) return envUrl;
   if (typeof window !== 'undefined' && window.location?.origin) {
-    const host = window.location.hostname;
-    const codespacesPortHost = host.replace(/-\d+\.app\.github\.dev$/, '-8000.app.github.dev');
-    if (codespacesPortHost !== host) {
-      return `${window.location.protocol}//${codespacesPortHost}`;
-    }
-    return `${window.location.protocol}//${host}:8000`;
+    return window.location.origin;
   }
   return 'http://127.0.0.1:8000';
 };

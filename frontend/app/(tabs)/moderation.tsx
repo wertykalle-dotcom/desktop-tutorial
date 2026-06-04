@@ -220,7 +220,7 @@ export default function ModerationScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={[styles.title, isRTL && styles.textRight]}>{t('moderation')}</Text>
-      <Text style={[styles.body, isRTL && styles.textRight]}>Moderointijono, herkkyys ja sisältöliputukset yhdellä sivulla.</Text>
+      <Text style={[styles.body, isRTL && styles.textRight]}>Moderointi on sisällön valvontaa: teksti, kuva ja ääni käydään läpi sääntöjen mukaisesti ennen kuin sisältö leviää laajasti.</Text>
       {loading ? <ActivityIndicator color="#007AFF" style={{ marginBottom: 16 }} /> : null}
 
       <View style={styles.card}>

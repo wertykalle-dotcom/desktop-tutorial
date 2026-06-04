@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { useAuth } from '../../src/contexts/AuthContext';
@@ -32,18 +32,18 @@ export default function NetworkScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={[styles.title, isRTL && styles.textRight]}>Verkosto</Text>
-      <Text style={[styles.body, isRTL && styles.textRight]}>Aktiiviset yhteydet, yhteistyöehdotukset ja debug-näkymät.</Text>
+      <Text style={[styles.title, isRTL && styles.textRight]}>Aktiiviset yhteydet</Text>
+      <Text style={[styles.body, isRTL && styles.textRight]}>Yhteistyöehdotukset ja verkoston yleinen tilanne yhdellä silmäyksellä.</Text>
       {loading ? <ActivityIndicator color="#007AFF" style={{ marginBottom: 16 }} /> : null}
       <View style={styles.metricRow}>
-        {metrics.map((metric) => (
+        {metrics.slice(0, 2).map((metric) => (
           <View key={metric.label} style={styles.metric}><Text style={styles.metricValue}>{metric.value}</Text><Text style={styles.metricLabel}>{metric.label}</Text></View>
         ))}
       </View>
-      <TouchableOpacity style={styles.button}>
-        <Ionicons name="analytics" size={18} color="#fff" />
-        <Text style={styles.buttonText}>A/B Debug -paneeli</Text>
-      </TouchableOpacity>
+      <View style={styles.infoCard}>
+        <Ionicons name="people-outline" size={18} color="#374151" />
+        <Text style={styles.infoText}>Julkinen näkymä näyttää aktiiviset kontaktit ja yhteistyöehdotukset. Diagnostiikka näkyy vain super-adminille.</Text>
+      </View>
     </ScrollView>
   );
 }
@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
   metric: { flex: 1, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, padding: 14, alignItems: 'center' },
   metricValue: { fontSize: 22, fontWeight: '900', color: '#007AFF' },
   metricLabel: { fontSize: 12, color: '#6b7280', marginTop: 4, fontWeight: '700' },
-  button: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, backgroundColor: '#111827', borderRadius: 14, paddingVertical: 14 },
-  buttonText: { color: '#fff', fontWeight: '800' },
+  infoCard: { flexDirection: 'row', alignItems: 'center', gap: 10, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, padding: 14 },
+  infoText: { flex: 1, color: '#4b5563', fontSize: 13, lineHeight: 20, fontWeight: '600' },
   textRight: { textAlign: 'right' },
 });

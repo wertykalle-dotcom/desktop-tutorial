@@ -1,19 +1,23 @@
 import { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { Redirect } from 'expo-router';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { defaultProjects, type ProjectItem } from '../../src/features/directories/directory-data';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { useApiClient } from '../../src/hooks/useApiClient';
+import { isSuperAdmin } from '../../src/utils/roles';
 
 export default function ProjectsScreen() {
   const { isRTL } = useI18n();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { apiFetch } = useApiClient();
+  const canAccess = isSuperAdmin(user?.role);
   const [projects, setProjects] = useState<ProjectItem[]>(defaultProjects);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    if (!canAccess) return;
     let mounted = true;
     const load = async () => {
       if (!mounted) return;
@@ -28,7 +32,11 @@ export default function ProjectsScreen() {
     return () => {
       mounted = false;
     };
-  }, [apiFetch, token]);
+  }, [apiFetch, canAccess, token]);
+
+  if (!canAccess) {
+    return <Redirect href="/(tabs)/feed" />;
+  }
 
   return (
     <ScrollView contentContainerStyle={styles.container}>

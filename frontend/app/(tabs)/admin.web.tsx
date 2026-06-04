@@ -397,7 +397,7 @@ export default function AdminWebScreen() {
       <View className="mx-auto w-full max-w-7xl" style={{ direction: isRTL ? 'rtl' : 'ltr' }}>
         <View className="mb-6 flex-row flex-wrap items-end justify-between gap-4">
           <View>
-            <Text className="text-3xl font-black text-white">{t('adminTitle')}</Text>
+            <Text className="text-3xl font-black text-white">{t('dashboard')}</Text>
             <Text className="mt-2 text-slate-400">{t('adminSubtitle')}</Text>
           </View>
           <View className="flex-row flex-wrap gap-3">

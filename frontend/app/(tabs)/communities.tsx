@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { defaultCommunities, type CommunityItem } from '../../src/features/directories/directory-data';
 import { useApiClient } from '../../src/hooks/useApiClient';
@@ -9,7 +8,6 @@ import { useApiClient } from '../../src/hooks/useApiClient';
 export default function CommunitiesScreen() {
   const { t, isRTL } = useI18n();
   const { apiFetch } = useApiClient();
-  const router = useRouter();
   const [communities, setCommunities] = useState<CommunityItem[]>(defaultCommunities);
   const [loading, setLoading] = useState(true);
   const [busyName, setBusyName] = useState<string | null>(null);
@@ -61,7 +59,7 @@ export default function CommunitiesScreen() {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={[styles.title, isRTL && styles.textRight]}>Yhteisöt</Text>
-      <Text style={[styles.body, isRTL && styles.textRight]}>Perusta teemasivuja, liity ryhmiin ja rakenna oma tila.</Text>
+      <Text style={[styles.body, isRTL && styles.textRight]}>Perusta teemasivuja, liity ryhmiin ja rakenna oma tila. Yhteisöjä voi seurata suoraan tästä näkymästä.</Text>
       <TouchableOpacity style={styles.refreshButton} onPress={() => void loadCommunities()}>
         <Text style={styles.refreshText}>{t('retry')}</Text>
       </TouchableOpacity>
@@ -71,10 +69,10 @@ export default function CommunitiesScreen() {
           <View style={styles.iconWrap}>
             <Ionicons name="people" size={18} color="#fff" />
           </View>
-          <TouchableOpacity style={{ flex: 1 }} onPress={() => router.push(`/communities/${encodeURIComponent(community.name)}` as never)}>
+          <View style={{ flex: 1 }}>
             <Text style={[styles.cardTitle, isRTL && styles.textRight]}>{community.name}</Text>
             <Text style={[styles.cardSub, isRTL && styles.textRight]}>{community.description} · {community.members} jäsentä</Text>
-          </TouchableOpacity>
+          </View>
           <TouchableOpacity
             style={[styles.joinButton, community.is_member && styles.joinedButton]}
             onPress={() => void toggleMembership(community.name)}

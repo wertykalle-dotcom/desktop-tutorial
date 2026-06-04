@@ -18,9 +18,7 @@ import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useI18n } from '../../src/contexts/I18nContext';
-
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
-const API_BASE = `${EXPO_PUBLIC_BACKEND_URL.replace(/\/+$/, '').replace(/\/api$/, '')}/api`;
+import { apiUrl } from '../../src/utils/api/http';
 
 export default function CreatePostScreen() {
   const [text, setText] = useState('');
@@ -108,11 +106,6 @@ export default function CreatePostScreen() {
       Alert.alert(t('error'), t('createAddTextOrImage'));
       return;
     }
-    if (!EXPO_PUBLIC_BACKEND_URL || !/^https?:\/\//i.test(EXPO_PUBLIC_BACKEND_URL)) {
-      Alert.alert(t('error'), t('createMissingBackendUrl'));
-      return;
-    }
-
     setLoading(true);
     try {
       const formData = new FormData();
@@ -169,7 +162,7 @@ export default function CreatePostScreen() {
         }
       }
 
-      const response = await fetch(`${API_BASE}/posts`, {
+      const response = await fetch(apiUrl('/posts'), {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,

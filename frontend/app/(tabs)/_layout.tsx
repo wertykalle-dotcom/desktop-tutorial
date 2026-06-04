@@ -7,7 +7,6 @@ import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { hasCompletedOnboarding, isNewUserProfile } from '../../src/utils/onboarding';
-import { canModerate, isSuperAdmin } from '../../src/utils/roles';
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
@@ -22,20 +21,24 @@ export default function TabsLayout() {
 
   useEffect(() => {
     const resolveOnboarding = async () => {
-      if (!user?.user_id) {
+      try {
+        if (!user?.user_id) {
+          setHasOnboarded(true);
+          return;
+        }
+        const shouldShow = isNewUserProfile(user);
+        if (!shouldShow) {
+          setHasOnboarded(true);
+          return;
+        }
+        const completed = await hasCompletedOnboarding(user.user_id);
+        setHasOnboarded(completed);
+      } catch (error) {
+        console.error('Error resolving onboarding state:', error);
         setHasOnboarded(true);
+      } finally {
         setOnboardingReady(true);
-        return;
       }
-      const shouldShow = isNewUserProfile(user);
-      if (!shouldShow) {
-        setHasOnboarded(true);
-        setOnboardingReady(true);
-        return;
-      }
-      const completed = await hasCompletedOnboarding(user.user_id);
-      setHasOnboarded(completed);
-      setOnboardingReady(true);
     };
 
     resolveOnboarding();
@@ -82,10 +85,6 @@ export default function TabsLayout() {
   if (!token || !user) {
     return <Redirect href="/(auth)/login" />;
   }
-
-  const userRole = user.role;
-  const canModerateUser = canModerate(userRole);
-  const canAdmin = isSuperAdmin(userRole);
 
   if (isNewUserProfile(user) && !hasOnboarded && pathname !== '/onboarding') {
     return <Redirect href="/onboarding" />;
@@ -171,14 +170,14 @@ export default function TabsLayout() {
           title: t('messages'),
           tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined,
           tabBarIcon: ({ color, size }) => (
-            <Ionicons name="chatbubbles" size={size} color={color} />
+            <Ionicons name="chatbubble-ellipses" size={size} color={color} />
           ),
         }}
       />
       <Tabs.Screen
         name="network"
         options={{
-          title: t('network'),
+          title: t('connections'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="people-circle" size={size} color={color} />
           ),
@@ -194,26 +193,6 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="projects"
-        options={{
-          title: t('projects'),
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="briefcase" size={size} color={color} />
-          ),
-        }}
-      />
-      {canModerateUser ? (
-        <Tabs.Screen
-          name="moderation"
-          options={{
-            title: t('moderation'),
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="shield-checkmark" size={size} color={color} />
-            ),
-          }}
-        />
-      ) : null}
-      <Tabs.Screen
         name="profile"
         options={{
           title: t('profile'),
@@ -223,17 +202,6 @@ export default function TabsLayout() {
           ),
         }}
       />
-      {canAdmin ? (
-        <Tabs.Screen
-          name="admin"
-          options={{
-            title: t('admin'),
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="shield-checkmark" size={size} color={color} />
-            ),
-          }}
-        />
-      ) : null}
     </Tabs>
   );
 }

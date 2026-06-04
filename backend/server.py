@@ -485,7 +485,10 @@ class MessageThreadItem(BaseModel):
     time: str
     unread_count: int = 0
     avatar_url: Optional[str] = None
+    participant_user_id: Optional[str] = None
+    last_sender_user_id: Optional[str] = None
     last_sender_username: Optional[str] = None
+    direction: Optional[str] = None
     last_read_at: Optional[str] = None
     last_message_state: Optional[str] = None
     is_typing: bool = False
@@ -1313,20 +1316,22 @@ async def build_message_thread_response(user: Dict[str, Any], thread_id: str, be
         unread_count = sqlite_count_thread_unread(user["user_id"], thread_id)
     partner_message = next((item for item in stored_messages if str(item.get("sender_user_id") or "") != user["user_id"]), None)
     partner_username = str(partner_message.get("sender_username") if partner_message else "user")
+    partner_user_id = str(partner_message.get("sender_user_id") if partner_message else "")
+    last_sender_user_id = str(stored_messages[-1].get("sender_user_id") or "") if stored_messages else ""
+    direction = "sent" if last_sender_user_id == user["user_id"] else "received"
     messages = [_normalize_message_row(item, user["user_id"]) for item in stored_messages]
     avatar_source = None
     if partner_message:
         avatar_source = partner_message.get("sender_profile_picture") or partner_message.get("profile_picture")
         if not avatar_source:
-            partner_user_id = str(partner_message.get("sender_user_id") or "")
             if db is not None and partner_user_id:
                 partner_user = await db.users.find_one({"user_id": partner_user_id}, {"_id": 0, "profile_picture": 1})
                 avatar_source = str(partner_user.get("profile_picture") or "") if partner_user else None
             else:
-                avatar_source = get_user_profile_picture_by_id(str(partner_message.get("sender_user_id") or ""))
+                avatar_source = get_user_profile_picture_by_id(partner_user_id)
     read_marks = [str(item.get("read_at") or "") for item in stored_messages if item.get("read_at")]
     last_read_at = max(read_marks) if read_marks else None
-    partner_presence = await get_user_presence_snapshot(str(partner_message.get("sender_user_id") or ""), partner_username) if partner_message else {"is_online": False}
+    partner_presence = await get_user_presence_snapshot(partner_user_id, partner_username) if partner_message else {"is_online": False}
     return MessageThreadResponse(
         thread=MessageThreadItem(
             id=thread_id,
@@ -1335,7 +1340,10 @@ async def build_message_thread_response(user: Dict[str, Any], thread_id: str, be
             time=messages[-1]["created_at"] if messages else utc_iso_now(),
             unread_count=unread_count,
             avatar_url=message_avatar_url(avatar_source if isinstance(avatar_source, str) else None),
+            participant_user_id=partner_user_id or None,
+            last_sender_user_id=last_sender_user_id or None,
             last_sender_username=partner_username,
+            direction=direction,
             last_read_at=last_read_at,
             is_typing=bool(await get_thread_typing_usernames(thread_id, user["user_id"])),
             is_online=bool(partner_presence.get("is_online")),
@@ -6686,6 +6694,7 @@ async def get_messages_directory(
         recipient_user_id = str(item.get("recipient_user_id") or "")
         actor_user_id = sender_user_id if sender_user_id != user["user_id"] else recipient_user_id
         actor_username = str(item.get("sender_username") or "user")
+        direction = "sent" if sender_user_id == user["user_id"] else "received"
         avatar_source = None
         if db is not None and actor_user_id:
             actor_user = await db.users.find_one({"user_id": actor_user_id}, {"_id": 0, "profile_picture": 1})
@@ -6716,7 +6725,10 @@ async def get_messages_directory(
                     await db.messages.count_documents({"thread_id": thread_id, "recipient_user_id": user["user_id"], "is_read": {"$ne": True}})
                 ),
                 "avatar_url": message_avatar_url(avatar_source),
+                "participant_user_id": actor_user_id,
+                "last_sender_user_id": sender_user_id,
                 "last_sender_username": actor_username,
+                "direction": direction,
                 "last_read_at": thread_last_read_at or last_message_read_at or str(item.get("delivered_at") or "") or None,
                 "last_message_delivered_at": str(item.get("delivered_at") or "") or None,
                 "last_message_read_at": last_message_read_at,
