@@ -229,28 +229,50 @@ export default function CommunitiesScreen() {
         </TouchableOpacity>
       ) : null}
 
+      <View style={styles.groupsHeader}>
+        <Text style={[styles.sectionTitle, isRTL && styles.textRight]}>Tutki ryhmiä</Text>
+        <Text style={[styles.sectionBody, isRTL && styles.textRight]}>
+          Liity keskusteluihin, seuraa aktiivisia aiheita ja löydä ihmiset saman kiinnostuksen ääreltä.
+        </Text>
+      </View>
+
       {loading ? <ActivityIndicator color="#007AFF" style={{ marginBottom: 16 }} /> : null}
-      {filteredCommunities.map((community) => (
-        <View key={community.name} style={styles.card}>
-          <View style={styles.iconWrap}>
-            <Ionicons name="people" size={18} color="#fff" />
+      <View style={[styles.groupGrid, isWide && styles.groupGridWide]}>
+        {filteredCommunities.map((community) => (
+          <View key={community.name} style={[styles.groupCard, isWide && styles.groupCardWide]}>
+            <View style={[styles.groupTopRow, isRTL && styles.rowReverse]}>
+              <View style={styles.groupIconWrap}>
+                <Ionicons name="people" size={20} color="#fff" />
+              </View>
+              <View style={[styles.memberBadge, isRTL && styles.rowReverse]}>
+                <Ionicons name="person" size={14} color="#2563eb" />
+                <Text style={styles.memberBadgeText}>{community.members} jäsentä</Text>
+              </View>
+            </View>
+            <View style={styles.groupContent}>
+              <Text style={[styles.cardTitle, isRTL && styles.textRight]}>{community.name}</Text>
+              <Text style={[styles.cardSub, isRTL && styles.textRight]}>{community.description}</Text>
+            </View>
+            <TouchableOpacity
+              style={[styles.joinButton, community.is_member && styles.joinedButton]}
+              onPress={() => void toggleMembership(community.name)}
+              disabled={busyName === community.name}
+            >
+              <Text style={[styles.joinText, community.is_member && styles.joinedText]}>
+                {busyName === community.name ? t('loading') : community.is_member ? t('communityLeave') : t('communityJoin')}
+              </Text>
+            </TouchableOpacity>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.cardTitle, isRTL && styles.textRight]}>{community.name}</Text>
-            <Text style={[styles.cardSub, isRTL && styles.textRight]}>{community.description} · {community.members} jäsentä</Text>
-          </View>
-          <TouchableOpacity
-            style={[styles.joinButton, community.is_member && styles.joinedButton]}
-            onPress={() => void toggleMembership(community.name)}
-            disabled={busyName === community.name}
-          >
-            <Text style={[styles.joinText, community.is_member && styles.joinedText]}>
-              {busyName === community.name ? t('loading') : community.is_member ? t('communityLeave') : t('communityJoin')}
-            </Text>
-          </TouchableOpacity>
+        ))}
+      </View>
+      {!loading && communities.length === 0 ? (
+        <View style={styles.emptyState}>
+          <Ionicons name="sparkles-outline" size={28} color="#64748b" />
+          <Text style={styles.emptyTitle}>Yhteisöt odottavat ensimmäisiä aiheita</Text>
+          <Text style={styles.emptyBody}>Kun syötteeseen syntyy aiheita ja hashtageja, niistä muodostetaan tänne löydettäviä ryhmiä.</Text>
         </View>
-      ))}
-      {!loading && filteredCommunities.length === 0 ? (
+      ) : null}
+      {!loading && communities.length > 0 && filteredCommunities.length === 0 ? (
         <View style={styles.emptyState}>
           <Ionicons name="compass-outline" size={28} color="#64748b" />
           <Text style={styles.emptyTitle}>Ei osumia</Text>
@@ -349,11 +371,54 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   activeFilterText: { color: '#334155', fontWeight: '900' },
-  card: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 14, padding: 14 },
-  iconWrap: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#22c55e', alignItems: 'center', justifyContent: 'center' },
-  cardTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },
-  cardSub: { fontSize: 13, color: '#6b7280', marginTop: 2 },
-  joinButton: { backgroundColor: '#eaf3ff', paddingHorizontal: 12, paddingVertical: 8, borderRadius: 999 },
+  groupsHeader: {
+    marginTop: 2,
+    gap: 4,
+  },
+  sectionTitle: { color: '#0f172a', fontSize: 21, fontWeight: '900' },
+  sectionBody: { color: '#64748b', fontSize: 14, lineHeight: 20 },
+  groupGrid: { gap: 12 },
+  groupGridWide: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'stretch',
+  },
+  groupCard: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 16,
+    padding: 16,
+    gap: 14,
+  },
+  groupCardWide: {
+    width: '31.8%',
+    minWidth: 240,
+    flexGrow: 1,
+  },
+  groupTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  groupIconWrap: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#22c55e', alignItems: 'center', justifyContent: 'center' },
+  memberBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  memberBadgeText: { color: '#2563eb', fontSize: 12, fontWeight: '900' },
+  groupContent: { flex: 1, gap: 4 },
+  cardTitle: { fontSize: 17, fontWeight: '900', color: '#111827' },
+  cardSub: { fontSize: 13, color: '#64748b', lineHeight: 19 },
+  joinButton: { alignSelf: 'flex-start', backgroundColor: '#eaf3ff', paddingHorizontal: 14, paddingVertical: 9, borderRadius: 999 },
   joinText: { color: '#007AFF', fontWeight: '800' },
   joinedButton: { backgroundColor: '#eef2ff' },
   joinedText: { color: '#4338ca' },
