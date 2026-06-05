@@ -1,16 +1,29 @@
 import { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useRouter } from 'expo-router';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Badge } from '../../src/components/Badge';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { type CreatorSuggestion, type ExploreTopic } from '../../src/features/directories/directory-data';
 
+const fallbackTopicLabels = ['#community', '#design', '#build', '#launch', '#fi', '#explore'];
+
+const topicMeta: Record<string, { area: string; tone: string; icon: keyof typeof Ionicons.glyphMap }> = {
+  '#community': { area: 'Yleinen keskustelu', tone: '#2563eb', icon: 'people' },
+  '#design': { area: 'Muotoilu & UI/UX', tone: '#7c3aed', icon: 'color-palette' },
+  '#build': { area: 'Kehitys & koodaus', tone: '#0f766e', icon: 'construct' },
+  '#launch': { area: 'Julkaisut & projektit', tone: '#ea580c', icon: 'rocket' },
+  '#fi': { area: 'Suomiyhteisö', tone: '#0284c7', icon: 'flag' },
+  '#explore': { area: 'Löydä uutta', tone: '#be123c', icon: 'compass' },
+};
+
 export default function ExploreScreen() {
   const { t, isRTL } = useI18n();
   const { token } = useAuth();
   const { apiFetch } = useApiClient();
+  const router = useRouter();
   const [topics, setTopics] = useState<ExploreTopic[]>([]);
   const [creators, setCreators] = useState<CreatorSuggestion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +47,7 @@ export default function ExploreScreen() {
   }, [apiFetch, token]);
 
   const topicLabels = useMemo(
-    () => (topics.length > 0 ? topics.map((topic) => topic.label) : ['#community', '#design', '#build', '#launch', '#fi', '#explore']),
+    () => (topics.length > 0 ? topics.map((topic) => topic.label) : fallbackTopicLabels),
     [topics]
   );
   const creatorLabels = useMemo(
@@ -53,9 +66,25 @@ export default function ExploreScreen() {
       <Text style={[styles.sectionTitle, isRTL && styles.textRight]}>Hashtagit</Text>
       {loading ? <ActivityIndicator color="#007AFF" style={{ marginBottom: 16 }} /> : null}
       <View style={styles.chipGrid}>
-        {topicLabels.map((topic) => (
-          <Badge key={topic} tone="brand" icon={<Ionicons name="pricetag" size={14} color="#0F62FE" />} label={topic} />
-        ))}
+        {topicLabels.map((topic) => {
+          const meta = topicMeta[topic] || { area: 'Aihe syötteessä', tone: '#2563eb', icon: 'pricetag' as const };
+          return (
+            <Pressable
+              key={topic}
+              style={[styles.topicBadge, { borderColor: meta.tone }]}
+              onPress={() => router.push({ pathname: '/search', params: { q: topic, tab: 'hashtags' } })}
+            >
+              <View style={[styles.topicIcon, { backgroundColor: meta.tone }]}>
+                <Ionicons name={meta.icon} size={16} color="#fff" />
+              </View>
+              <View style={styles.topicTextWrap}>
+                <Text style={styles.topicLabel}>{topic}</Text>
+                <Text style={styles.topicArea}>{meta.area}</Text>
+              </View>
+              <Ionicons name="arrow-forward" size={15} color={meta.tone} />
+            </Pressable>
+          );
+        })}
       </View>
 
       <Text style={[styles.sectionTitle, isRTL && styles.textRight]}>Ehdotetut tekijät</Text>
@@ -82,6 +111,26 @@ const styles = StyleSheet.create({
   body: { fontSize: 15, lineHeight: 22, color: '#4b5563' },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#111827', marginBottom: 10, marginTop: 4 },
   chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
+  topicBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 9,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  topicIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topicTextWrap: { minWidth: 88 },
+  topicLabel: { color: '#111827', fontSize: 13, fontWeight: '900' },
+  topicArea: { color: '#64748B', fontSize: 10, fontWeight: '700', marginTop: 1 },
   row: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderRadius: 16, padding: 14, marginBottom: 10, borderWidth: 1, borderColor: '#e5e7eb' },
   avatar: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#007AFF', alignItems: 'center', justifyContent: 'center' },
   rowTitle: { fontSize: 15, fontWeight: '800', color: '#111827' },

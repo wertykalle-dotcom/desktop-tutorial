@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -10,7 +10,7 @@ import {
   View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Badge } from '../../src/components/Badge';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useI18n } from '../../src/contexts/I18nContext';
@@ -92,38 +92,89 @@ export default function SearchScreen() {
   const { apiFetch } = useApiClient();
   const { t, isRTL } = useI18n();
   const router = useRouter();
-  const [query, setQuery] = useState('');
+  const params = useLocalSearchParams<{ q?: string | string[]; tab?: string | string[] }>();
+  const initialQuery = Array.isArray(params.q) ? params.q[0] || '' : params.q || '';
+  const initialTab = Array.isArray(params.tab) ? params.tab[0] : params.tab;
+  const [query, setQuery] = useState(initialQuery);
   const [results, setResults] = useState<SearchResponse>(emptyResult);
-  const [activeTab, setActiveTab] = useState<SearchTab>('all');
+  const [activeTab, setActiveTab] = useState<SearchTab>(initialTab === 'hashtags' ? 'hashtags' : 'all');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [expandedCards, setExpandedCards] = useState<Record<string, boolean>>({});
+  const appliedParamRef = useRef(`${initialQuery}|${initialTab || ''}`);
+  const searchRequestRef = useRef(0);
+
+  useEffect(() => {
+    const nextQuery = Array.isArray(params.q) ? params.q[0] || '' : params.q || '';
+    const nextTab = Array.isArray(params.tab) ? params.tab[0] : params.tab;
+    const nextParamKey = `${nextQuery}|${nextTab || ''}`;
+    if (nextParamKey === appliedParamRef.current) return;
+    appliedParamRef.current = nextParamKey;
+    if (nextQuery) {
+      setQuery(nextQuery);
+    }
+    if (nextTab === 'hashtags' && activeTab !== 'hashtags') {
+      setActiveTab('hashtags');
+    }
+  }, [activeTab, params.q, params.tab]);
+
+  const resetSearch = useCallback(() => {
+    searchRequestRef.current += 1;
+    setResults(emptyResult);
+    setLoading(false);
+    setError(null);
+    setExpandedCards({});
+    setActiveTab('all');
+  }, []);
+
+  const handleQueryChange = useCallback((text: string) => {
+    setQuery(text);
+    if (text.trim() === '') {
+      resetSearch();
+    }
+  }, [resetSearch]);
 
   const runSearch = useCallback(async (value: string) => {
+    const trimmedValue = value.trim();
+    if (!trimmedValue) {
+      resetSearch();
+      return;
+    }
+    const requestId = searchRequestRef.current + 1;
+    searchRequestRef.current = requestId;
     setLoading(true);
     setError(null);
     try {
-      const response = await apiFetch(`/search?q=${encodeURIComponent(value)}&limit=10`, {}, { requireAuth: true });
+      const response = await apiFetch(`/search?q=${encodeURIComponent(trimmedValue)}&limit=10`, {}, { requireAuth: true });
+      if (requestId !== searchRequestRef.current) return;
       if (!response) return;
       if (response.ok) {
         const data = (await response.json()) as SearchResponse;
+        if (requestId !== searchRequestRef.current) return;
         setResults(data);
       } else {
         setError(t('searchError'));
       }
     } catch {
+      if (requestId !== searchRequestRef.current) return;
       setError(t('searchError'));
     } finally {
-      setLoading(false);
+      if (requestId === searchRequestRef.current) {
+        setLoading(false);
+      }
     }
-  }, [apiFetch, t]);
+  }, [apiFetch, resetSearch, t]);
 
   useEffect(() => {
+    if (!query.trim()) {
+      resetSearch();
+      return undefined;
+    }
     const timeoutId = setTimeout(() => {
       void runSearch(query);
     }, 350);
     return () => clearTimeout(timeoutId);
-  }, [query, runSearch]);
+  }, [query, resetSearch, runSearch]);
 
   const onRefresh = () => {
     void runSearch(query);
@@ -170,7 +221,7 @@ export default function SearchScreen() {
         <Ionicons name="search" size={18} color="#8E8E93" />
         <TextInput
           value={query}
-          onChangeText={setQuery}
+          onChangeText={handleQueryChange}
           placeholder={t('searchPlaceholder')}
           placeholderTextColor="#8E8E93"
           style={[styles.input, isRTL && styles.textRight]}
