@@ -3,7 +3,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../../src/contexts/AuthContext';
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import { View, ActivityIndicator, StyleSheet, useWindowDimensions } from 'react-native';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { hasCompletedOnboarding, isNewUserProfile } from '../../src/utils/onboarding';
@@ -11,6 +11,7 @@ import { canModerate, isSuperAdmin } from '../../src/utils/roles';
 
 export default function TabsLayout() {
   const insets = useSafeAreaInsets();
+  const { width } = useWindowDimensions();
   const pathname = usePathname();
   const { token, user, loading } = useAuth();
   const { t, isRTL, isReady } = useI18n();
@@ -21,6 +22,7 @@ export default function TabsLayout() {
   const [hasOnboarded, setHasOnboarded] = useState(true);
   const canSeeAdminTabs = isSuperAdmin(user?.role);
   const canSeeModerationTab = canModerate(user?.role);
+  const isMobile = width < 768;
 
   useEffect(() => {
     const resolveOnboarding = async () => {
@@ -101,23 +103,29 @@ export default function TabsLayout() {
       )}
       initialRouteName="feed"
       screenOptions={{
-        tabBarPosition: 'top',
-        tabBarActiveTintColor: '#007AFF',
-        tabBarInactiveTintColor: '#8E8E93',
+        tabBarPosition: isMobile ? 'bottom' : 'top',
+        tabBarActiveTintColor: isMobile ? '#fff' : '#ef4444',
+        tabBarInactiveTintColor: isMobile ? '#B8C0D8' : '#64748B',
+        tabBarScrollEnabled: !isMobile,
         tabBarItemStyle: {
-          flex: 1,
+          width: isMobile ? undefined : 112,
         },
         tabBarStyle: {
-          backgroundColor: '#fff',
-          borderBottomWidth: 1,
-          borderBottomColor: '#E5E5EA',
-          borderTopWidth: 0,
-          height: 60 + insets.top,
-          paddingTop: insets.top + 6,
-          paddingBottom: 6,
+          backgroundColor: isMobile ? '#08111f' : '#fff',
+          borderBottomWidth: isMobile ? 0 : 1,
+          borderBottomColor: '#FFE1E1',
+          borderTopWidth: isMobile ? 1 : 0,
+          borderTopColor: 'rgba(255,255,255,0.12)',
+          height: isMobile ? 66 + insets.bottom : 60 + insets.top,
+          paddingTop: isMobile ? 6 : insets.top + 6,
+          paddingBottom: isMobile ? Math.max(insets.bottom, 8) : 6,
+          shadowColor: '#ef4444',
+          shadowOpacity: isMobile ? 0.22 : 0,
+          shadowRadius: isMobile ? 18 : 0,
         },
+        tabBarLabelStyle: { fontSize: 11, fontWeight: '900' },
         headerStyle: {
-          backgroundColor: '#007AFF',
+          backgroundColor: '#ef4444',
         },
         headerTintColor: '#fff',
         headerTitleStyle: {
@@ -134,16 +142,36 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="feed"
         options={{
-          title: t('feed'),
+          title: isMobile ? 'Syöte' : t('feed'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="home" size={size} color={color} />
           ),
         }}
       />
       <Tabs.Screen
+        name="media"
+        options={{
+          title: 'Media',
+          href: isMobile ? null : undefined,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="images" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="discussions"
+        options={{
+          title: 'Keskustelut',
+          href: isMobile ? null : undefined,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="chatbubbles" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="explore"
         options={{
-          title: t('explore'),
+          title: isMobile ? 'Tutki' : t('explore'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="compass" size={size} color={color} />
           ),
@@ -153,6 +181,7 @@ export default function TabsLayout() {
         name="search"
         options={{
           title: t('search'),
+          href: isMobile ? null : undefined,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="search" size={size} color={color} />
           ),
@@ -161,9 +190,18 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="create"
         options={{
-          title: t('createPost'),
+          title: isMobile ? 'Luo' : t('createPost'),
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="add-circle" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="live"
+        options={{
+          title: isMobile ? 'Live' : 'Livenä',
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="radio" size={size} color={color} />
           ),
         }}
       />
@@ -172,6 +210,7 @@ export default function TabsLayout() {
         options={{
           title: t('messages'),
           tabBarLabel: t('messages'),
+          href: isMobile ? null : undefined,
           tabBarBadge: messageUnreadCount > 0 ? messageUnreadCount : undefined,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="chatbubble-ellipses" size={size} color={color} />
@@ -182,6 +221,7 @@ export default function TabsLayout() {
         name="network"
         options={{
           title: t('connections'),
+          href: isMobile ? null : undefined,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="people-circle" size={size} color={color} />
           ),
@@ -191,6 +231,7 @@ export default function TabsLayout() {
         name="communities"
         options={{
           title: t('communities'),
+          href: isMobile ? null : undefined,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="people" size={size} color={color} />
           ),
@@ -200,7 +241,7 @@ export default function TabsLayout() {
         name="moderation"
         options={{
           title: t('moderation'),
-          href: canSeeModerationTab ? undefined : null,
+          href: !isMobile && canSeeModerationTab ? undefined : null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="shield-checkmark" size={size} color={color} />
           ),
@@ -210,7 +251,7 @@ export default function TabsLayout() {
         name="projects"
         options={{
           title: t('projects'),
-          href: canSeeAdminTabs ? undefined : null,
+          href: !isMobile && canSeeAdminTabs ? undefined : null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="briefcase" size={size} color={color} />
           ),
@@ -220,7 +261,7 @@ export default function TabsLayout() {
         name="admin"
         options={{
           title: t('admin'),
-          href: canSeeAdminTabs ? undefined : null,
+          href: !isMobile && canSeeAdminTabs ? undefined : null,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="settings" size={size} color={color} />
           ),
@@ -229,7 +270,7 @@ export default function TabsLayout() {
       <Tabs.Screen
         name="profile"
         options={{
-          title: t('profile'),
+          title: isMobile ? 'Profiili' : t('profile'),
           tabBarBadge: notificationUnreadCount > 0 ? notificationUnreadCount : undefined,
           tabBarIcon: ({ color, size }) => (
             <Ionicons name="person" size={size} color={color} />

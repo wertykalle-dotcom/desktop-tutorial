@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,9 @@ import {
   Platform,
   Animated,
   useWindowDimensions,
+  ScrollView,
+  Modal,
+  Share,
 } from 'react-native';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,6 +44,72 @@ type AdConfig = {
 };
 
 type FeedItem = DwellFeedItem | { type: 'ad'; id: string; label: string };
+
+type HotPostBadge = {
+  icon: string;
+  label: string;
+  tone: 'phenomenon' | 'comet' | 'hot' | 'rising';
+};
+
+type CommentNode = Comment & { replies: CommentNode[] };
+
+const reactionOptions = [
+  { key: 'fire', emoji: '🔥', label: 'Kova' },
+  { key: 'idea', emoji: '💡', label: 'Idea' },
+  { key: 'rocket', emoji: '🚀', label: 'Nosto' },
+];
+
+const liveChatSeed = [
+  '@mira: Mahtava aihe!',
+  '@arto: Kysymys hostille...',
+  '@sanna: Tämä näyttää hyvältä.',
+  '@toni: Voiko tästä tehdä Q&A:n?',
+  '@leena: 🔥🔥🔥',
+];
+
+const liveHosts = [
+  { id: 'live_1', name: 'YOSLA', topic: '#Luonto' },
+  { id: 'live_2', name: 'Studio FI', topic: '#build' },
+  { id: 'live_3', name: 'Creator Lab', topic: '#design' },
+];
+
+const achievementBadges = [
+  { icon: 'ribbon', title: 'Perustajajäsen', value: 'Aktiivinen' },
+  { icon: 'chatbubbles', title: 'Viikon keskustelija', value: '12 vastausta' },
+  { icon: 'star', title: 'Suosittu kirjoittaja', value: '340 pistettä' },
+] as const;
+
+const getPostBadge = (commentsCount = 0): HotPostBadge | null => {
+  if (commentsCount >= 500) return { icon: '🚀', label: 'Ilmiö', tone: 'phenomenon' };
+  if (commentsCount >= 150) return { icon: '☄️', label: 'Kometti', tone: 'comet' };
+  if (commentsCount >= 50) return { icon: '🔥', label: 'Kova Uutinen', tone: 'hot' };
+  if (commentsCount >= 5) return { icon: '⭐', label: 'Nouseva keskustelu', tone: 'rising' };
+  return null;
+};
+
+const buildCommentTree = (comments: Comment[]): CommentNode[] => {
+  const nodes = new Map<string, CommentNode>();
+  const roots: CommentNode[] = [];
+  comments.forEach((comment) => {
+    nodes.set(comment.comment_id, { ...comment, replies: [] });
+  });
+  comments.forEach((comment) => {
+    const node = nodes.get(comment.comment_id);
+    if (!node) return;
+    const parentId = String(
+      (comment as { parent_comment_id?: string; reply_to_comment_id?: string }).parent_comment_id ||
+      (comment as { parent_comment_id?: string; reply_to_comment_id?: string }).reply_to_comment_id ||
+      ''
+    );
+    const parent = parentId ? nodes.get(parentId) : null;
+    if (parent) {
+      parent.replies.push(node);
+    } else {
+      roots.push(node);
+    }
+  });
+  return roots;
+};
 
 function NativeFeedVideo({ uri }: { uri: string }) {
   const player = useVideoPlayer(uri, (videoPlayer) => {
@@ -90,6 +159,12 @@ function FeedScreen() {
   const [mutedByUserId, setMutedByUserId] = useState<Record<string, boolean>>({});
   const [blockedByUserId, setBlockedByUserId] = useState<Record<string, boolean>>({});
   const [imageAspectByPostId, setImageAspectByPostId] = useState<Record<string, number>>({});
+  const [reactionByPost, setReactionByPost] = useState<Record<string, string>>({});
+  const [reactionCountsByPost, setReactionCountsByPost] = useState<Record<string, Record<string, number>>>({});
+  const [savedByPost, setSavedByPost] = useState<Record<string, boolean>>({});
+  const [dailyVote, setDailyVote] = useState<'yes' | 'no' | null>(null);
+  const [activeLiveHost, setActiveLiveHost] = useState<typeof liveHosts[number] | null>(null);
+  const [liveChatMessages, setLiveChatMessages] = useState<string[]>(liveChatSeed.slice(0, 2));
   const [adConfig, setAdConfig] = useState<AdConfig>({
     placements: { in_feed: false, sidebar: false, interstitial: false },
     frequency: 5,
@@ -109,6 +184,7 @@ function FeedScreen() {
   const sendDwellEventRef = useRef<(postId: string, dwellMs: number) => Promise<void>>(async () => {});
   const flushVisibleDwellRef = useRef<() => Promise<void>>(async () => {});
   const isNewUser = (user?.posts_count ?? 0) < 3 && (user?.followers_count ?? 0) === 0 && (user?.following_count ?? 0) <= 2;
+  const isDesktop = width >= 768;
 
   const resolveMediaUrl = (uri?: string) => {
     if (!uri) return undefined;
@@ -117,6 +193,152 @@ function FeedScreen() {
   };
 
   const isVideoUrl = (uri?: string) => !!uri && /\.(mp4|mov|webm)(?:$|\?)/i.test(uri);
+
+  const hotPosts = useMemo(
+    () =>
+      posts
+        .map((post) => ({ post, badge: getPostBadge(post.comments_count || 0) }))
+        .filter((item): item is { post: LocalPost; badge: HotPostBadge } => !!item.badge)
+        .sort((a, b) => (b.post.comments_count || 0) - (a.post.comments_count || 0))
+        .slice(0, 4),
+    [posts]
+  );
+
+  const sharePost = async (post: LocalPost) => {
+    const path = `/posts/${post.post_id}`;
+    const url = Platform.OS === 'web' && typeof window !== 'undefined'
+      ? `${window.location.origin}${path}`
+      : path;
+    try {
+      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
+        await navigator.clipboard.writeText(url);
+        Alert.alert('Jaettu', 'Linkki kopioitu leikepöydälle.');
+        return;
+      }
+      await Share.share({ message: `${post.text}\n${url}` });
+    } catch (error) {
+      console.error('Error sharing post:', error);
+      Alert.alert(t('error'), 'Jakaminen ei onnistunut.');
+    }
+  };
+
+  const toggleSavePost = async (post: LocalPost) => {
+    const postId = post.post_id;
+    const previousSaved = savedByPost[postId] ?? !!post.is_bookmarked;
+    const optimisticSaved = !previousSaved;
+    setSavedByPost((prev) => ({ ...prev, [postId]: optimisticSaved }));
+    setPosts((prev) => prev.map((item) => item.post_id === postId ? { ...item, is_bookmarked: optimisticSaved } : item));
+    try {
+      const response = await apiFetch(`/posts/${postId}/bookmark`, { method: 'POST' });
+      if (!response || !response.ok) {
+        throw new Error(`Bookmark failed (${response?.status || 'network'})`);
+      }
+      const payload = await response.json();
+      setSavedByPost((prev) => ({ ...prev, [postId]: !!payload.is_bookmarked }));
+      setPosts((prev) => prev.map((item) => item.post_id === postId ? { ...item, is_bookmarked: !!payload.is_bookmarked } : item));
+    } catch (error) {
+      console.error('Error toggling bookmark:', error);
+      setSavedByPost((prev) => ({ ...prev, [postId]: previousSaved }));
+      setPosts((prev) => prev.map((item) => item.post_id === postId ? { ...item, is_bookmarked: previousSaved } : item));
+      Alert.alert(t('error'), 'Kirjanmerkin tallennus ei onnistunut.');
+    }
+  };
+
+  const handleReaction = async (post: LocalPost, reactionKey: string) => {
+    const previousReaction = reactionByPost[post.post_id] || post.user_reaction || null;
+    const previousCounts = reactionCountsByPost[post.post_id] || post.reaction_counts || {};
+    setReactionByPost((prev) => {
+      setReactionCountsByPost((counts) => {
+        const current = counts[post.post_id] || {};
+        const next = {
+          ...current,
+          [reactionKey]: Math.max(0, (current[reactionKey] || 0) + (previousReaction === reactionKey ? 0 : 1)),
+        };
+        if (previousReaction && previousReaction !== reactionKey) {
+          next[previousReaction] = Math.max(0, (next[previousReaction] || 0) - 1);
+        }
+        return { ...counts, [post.post_id]: next };
+      });
+      return { ...prev, [post.post_id]: reactionKey };
+    });
+    try {
+      const response = await apiFetch(`/posts/${post.post_id}/reaction`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ reaction_type: reactionKey }),
+      });
+      if (!response || !response.ok) {
+        throw new Error(`Reaction failed (${response?.status || 'network'})`);
+      }
+      const payload = await response.json();
+      setReactionByPost((prev) => ({ ...prev, [post.post_id]: payload.reaction_type }));
+      setReactionCountsByPost((prev) => ({ ...prev, [post.post_id]: payload.reaction_counts || {} }));
+      setPosts((prevPosts) =>
+        prevPosts.map((item) =>
+          item.post_id === post.post_id
+            ? { ...item, user_reaction: payload.reaction_type, reaction_counts: payload.reaction_counts || {} }
+            : item
+        )
+      );
+    } catch (error) {
+      console.error('Error reacting to post:', error);
+      setReactionByPost((prev) => ({ ...prev, [post.post_id]: previousReaction || '' }));
+      setReactionCountsByPost((prev) => ({ ...prev, [post.post_id]: previousCounts }));
+      Alert.alert(t('error'), 'Reaktion tallennus ei onnistunut.');
+    }
+  };
+
+  const votePollOption = async (post: LocalPost, optionId: string) => {
+    if (!post.poll) return;
+    const previousPoll = post.poll;
+    const previousPosts = posts;
+    const nextOptions = post.poll.options.map((option) => {
+      let votesCount = option.votes_count || 0;
+      if (post.poll?.user_vote && option.option_id === post.poll.user_vote && post.poll.user_vote !== optionId) {
+        votesCount = Math.max(0, votesCount - 1);
+      }
+      if (option.option_id === optionId && post.poll?.user_vote !== optionId) {
+        votesCount += 1;
+      }
+      return { ...option, votes_count: votesCount };
+    });
+    const optimisticPoll = {
+      ...post.poll,
+      options: nextOptions,
+      total_votes: nextOptions.reduce((sum, option) => sum + (option.votes_count || 0), 0),
+      user_vote: optionId,
+    };
+    setPosts((current) => current.map((item) => item.post_id === post.post_id ? { ...item, poll: optimisticPoll } : item));
+    try {
+      const response = await apiFetch(`/posts/${post.post_id}/poll/vote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ option_id: optionId }),
+      });
+      if (!response || !response.ok) {
+        throw new Error(`Poll vote failed (${response?.status || 'network'})`);
+      }
+      const poll = await response.json();
+      setPosts((current) => current.map((item) => item.post_id === post.post_id ? { ...item, poll } : item));
+    } catch (error) {
+      console.error('Error voting poll:', error);
+      setPosts(previousPosts.map((item) => item.post_id === post.post_id ? { ...item, poll: previousPoll } : item));
+      Alert.alert(t('error'), 'Äänen tallennus ei onnistunut.');
+    }
+  };
+
+  useEffect(() => {
+    if (!activeLiveHost) {
+      setLiveChatMessages(liveChatSeed.slice(0, 2));
+      return undefined;
+    }
+    let index = 2;
+    const intervalId = setInterval(() => {
+      setLiveChatMessages((current) => [...current.slice(-4), liveChatSeed[index % liveChatSeed.length]]);
+      index += 1;
+    }, 1800);
+    return () => clearInterval(intervalId);
+  }, [activeLiveHost]);
 
   const handleRepost = async (post: LocalPost) => {
     if (repostLoadingByPost[post.post_id]) return;
@@ -692,8 +914,251 @@ function FeedScreen() {
     );
   };
 
+  const renderLiveNowSection = () => (
+    <View style={styles.liveNowSection}>
+      <View style={[styles.sectionHeaderRow, isRTL && styles.rowReverse]}>
+        <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Livenä nyt</Text>
+        <Text style={styles.livePulseText}>LIVE</Text>
+      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.liveScroller}>
+        {liveHosts.map((host) => (
+          <TouchableOpacity key={host.id} style={styles.liveHostCard} onPress={() => setActiveLiveHost(host)}>
+            <View style={styles.liveAvatarRing}>
+              <Text style={styles.liveAvatarInitial}>{host.name.slice(0, 1)}</Text>
+              <View style={styles.liveBadge}>
+                <Text style={styles.liveBadgeText}>LIVE</Text>
+              </View>
+            </View>
+            <Text style={styles.liveHostName} numberOfLines={1}>{host.name}</Text>
+            <Text style={styles.liveTopic} numberOfLines={1}>{host.topic}</Text>
+            <Text style={styles.liveViewerCount}>{host.id === 'live_1' ? 128 : host.id === 'live_2' ? 84 : 42} katsojaa</Text>
+          </TouchableOpacity>
+        ))}
+      </ScrollView>
+    </View>
+  );
+
+  const renderDailyQuestion = () => {
+    const yesVotes = 63 + (dailyVote === 'yes' ? 1 : 0);
+    const noVotes = 37 + (dailyVote === 'no' ? 1 : 0);
+    const total = yesVotes + noVotes;
+    const yesPercent = Math.round((yesVotes / total) * 100);
+    const noPercent = 100 - yesPercent;
+    return (
+      <View style={styles.dailyQuestionCard}>
+        <View style={[styles.sectionHeaderRow, isRTL && styles.rowReverse]}>
+          <Text style={[styles.feedSectionTitle, styles.lightSectionTitle, isRTL && styles.textRight]}>Päivän kysymys</Text>
+          <Ionicons name="flash" size={18} color="#facc15" />
+        </View>
+        <Text style={[styles.dailyQuestionText, isRTL && styles.textRight]}>Poistaisitko TikTokin jos sait 150 €?</Text>
+        <View style={[styles.dailyVoteRow, isRTL && styles.rowReverse]}>
+          <TouchableOpacity
+            style={[styles.dailyVoteButton, dailyVote === 'yes' && styles.dailyVoteButtonActive]}
+            onPress={() => setDailyVote('yes')}
+          >
+            <View style={[styles.dailyVoteFill, { width: `${yesPercent}%` }]} />
+            <Text style={styles.dailyVoteText}>Kyllä</Text>
+            <Text style={styles.dailyVotePercent}>{yesPercent}%</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.dailyVoteButton, dailyVote === 'no' && styles.dailyVoteButtonActive]}
+            onPress={() => setDailyVote('no')}
+          >
+            <View style={[styles.dailyVoteFill, styles.dailyVoteFillNo, { width: `${noPercent}%` }]} />
+            <Text style={styles.dailyVoteText}>En</Text>
+            <Text style={styles.dailyVotePercent}>{noPercent}%</Text>
+          </TouchableOpacity>
+        </View>
+        <Text style={styles.dailyVoteMeta}>{total} paikallista ääntä tässä sessiossa</Text>
+      </View>
+    );
+  };
+
+  const renderWeeklyChallenge = () => (
+    <View style={styles.challengeCard}>
+      <View style={styles.challengeIconWrap}>
+        <Ionicons name="sparkles" size={20} color="#fff" />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.challengeKicker, isRTL && styles.textRight]}>Viikon yhteisöhaaste</Text>
+        <Text style={[styles.challengeTitle, isRTL && styles.textRight]}>Tämän viikon teema on #Luonto</Text>
+        <Text style={[styles.challengeBody, isRTL && styles.textRight]}>Jaa paras kuvasi tai videosi ja kerää YOSLA-pisteitä.</Text>
+      </View>
+    </View>
+  );
+
+  const renderTrendingNow = () => (
+    <View style={styles.trendingSection}>
+      <View style={[styles.sectionHeaderRow, isRTL && styles.rowReverse]}>
+        <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Puhutuimmat juuri nyt</Text>
+        <Ionicons name="trending-up" size={18} color="#ef4444" />
+      </View>
+      {hotPosts.length ? (
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.trendingScroller}>
+          {hotPosts.map(({ post, badge }) => (
+            <TouchableOpacity
+              key={post.post_id}
+              style={[styles.trendingCard, styles[`hotBadge_${badge.tone}`]]}
+              onPress={() => setExpandedComments((prev) => ({ ...prev, [post.post_id]: true }))}
+            >
+              <Text style={styles.trendingBadge}>{badge.icon} {badge.label}</Text>
+              <Text style={styles.trendingTitle} numberOfLines={2}>{post.text || `@${post.username}`}</Text>
+              <Text style={styles.trendingMeta}>@{post.username} · {post.comments_count || 0} kommenttia</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      ) : (
+        <View style={styles.trendingEmptyCard}>
+          <Text style={styles.trendingEmptyTitle}>⭐ Nouseva keskustelu</Text>
+          <Text style={styles.trendingEmptyBody}>Kommentoi kiinnostavia julkaisuja, niin kuumimmat aiheet nousevat tähän.</Text>
+        </View>
+      )}
+    </View>
+  );
+
+  const renderPhenomenaPanel = () => (
+    <View style={styles.phenomenaPanel}>
+      <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Ilmiöt</Text>
+      {['#TikTok150', '#Luonto', '#CreatorLab'].map((item, index) => (
+        <View key={item} style={styles.phenomenonRow}>
+          <Text style={styles.phenomenonRank}>🚀 {index + 1}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.phenomenonTag}>{item}</Text>
+            <Text style={styles.phenomenonMeta}>+{(index + 2) * 19}% vauhti viime tunnilla</Text>
+          </View>
+        </View>
+      ))}
+    </View>
+  );
+
+  const renderUpcomingStreams = () => (
+    <View style={styles.upcomingPanel}>
+      <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Tulevat striimit</Text>
+      {['AI suunnittelee yhteisön', 'Kuuma uutinen: somevero', 'Mediakisa finaali'].map((title, index) => (
+        <View key={title} style={styles.streamRow}>
+          <Text style={styles.streamTime}>{index === 0 ? '18:00' : index === 1 ? '20:30' : 'Huomenna'}</Text>
+          <Text style={styles.streamTitle}>{title}</Text>
+        </View>
+      ))}
+    </View>
+  );
+
+  const renderGamificationPanel = () => (
+    <View style={styles.gamificationPanel}>
+      <View style={[styles.sectionHeaderRow, isRTL && styles.rowReverse]}>
+        <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Oma eteneminen</Text>
+        <View style={styles.pointsBadge}>
+          <Ionicons name="flash" size={14} color="#92400e" />
+          <Text style={styles.pointsBadgeText}>340 pistettä</Text>
+        </View>
+      </View>
+      <View style={styles.streakRow}>
+        <View style={styles.streakPill}>
+          <Text style={styles.streakValue}>3</Text>
+          <Text style={styles.streakLabel}>päivän putki</Text>
+        </View>
+        {achievementBadges.map((badge) => (
+          <View key={badge.title} style={styles.achievementBadge}>
+            <Ionicons name={badge.icon} size={16} color="#0f62fe" />
+            <View style={{ flex: 1 }}>
+              <Text style={styles.achievementTitle} numberOfLines={1}>{badge.title}</Text>
+              <Text style={styles.achievementValue} numberOfLines={1}>{badge.value}</Text>
+            </View>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+
+  const renderActiveLiveModal = () => (
+    <Modal visible={!!activeLiveHost} animationType="slide" onRequestClose={() => setActiveLiveHost(null)}>
+      <View style={styles.liveModal}>
+        <View style={styles.liveVideoShell}>
+          <Text style={styles.liveModalBadge}>LIVE</Text>
+          <Ionicons name="videocam" size={54} color="#fff" />
+          <Text style={styles.liveModalTitle}>{activeLiveHost?.name}</Text>
+          <Text style={styles.liveModalTopic}>{activeLiveHost?.topic} · aktiivinen stream-pohja</Text>
+          <View style={styles.floatingReactionOne}><Text style={styles.floatingReactionText}>🔥</Text></View>
+          <View style={styles.floatingReactionTwo}><Text style={styles.floatingReactionText}>🚀</Text></View>
+        </View>
+        <View style={styles.liveOverlayGrid}>
+          <View style={styles.liveChatPanel}>
+            <Text style={styles.livePanelTitle}>Live-chat</Text>
+            {liveChatMessages.map((message, index) => (
+              <Text key={`${message}-${index}`} style={styles.liveChatLine}>{message}</Text>
+            ))}
+          </View>
+          <View style={styles.liveSidePanel}>
+            <Text style={styles.livePanelTitle}>Q&A</Text>
+            <Text style={styles.liveChatLine}>Nosta parhaat kysymykset tähän.</Text>
+            <View style={styles.guestModeBox}>
+              <Ionicons name="person-add" size={18} color="#fff" />
+              <Text style={styles.guestModeText}>Vierastila valmiina</Text>
+            </View>
+          </View>
+        </View>
+        <TouchableOpacity style={styles.liveExitButton} onPress={() => setActiveLiveHost(null)}>
+          <Text style={styles.liveExitText}>Poistu</Text>
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+
+  const renderCommentNode = (comment: CommentNode, postId: string, depth = 0): React.ReactNode => {
+    const isOwnComment = user?.user_id === comment.user_id;
+    const isEditing = editingCommentIdByPost[postId] === comment.comment_id;
+    const isOnline = Boolean((comment as { is_online?: boolean }).is_online);
+    return (
+      <View key={comment.comment_id} style={[styles.commentRow, depth > 0 && styles.commentReplyRow, { marginLeft: Math.min(depth, 3) * 16 }]}>
+        <View style={[styles.commentTopRow, isRTL && styles.rowReverse]}>
+          <View style={styles.commentAuthorWrap}>
+            <Text style={[styles.commentAuthor, isRTL && styles.textRight]}>{comment.username}</Text>
+            {isOnline ? <View style={styles.commentPresenceDot} /> : null}
+          </View>
+          {isOwnComment && !isEditing && (
+            <View style={[styles.commentActionRow, isRTL && styles.rowReverse]}>
+              <TouchableOpacity onPress={() => startEditComment(postId, comment)}>
+                <Text style={styles.commentActionText}>{t('feedCommentEdit')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => confirmDeleteComment(postId, comment.comment_id)}>
+                <Text style={[styles.commentActionText, styles.commentDeleteText]}>{t('feedCommentDelete')}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {isEditing ? (
+          <View style={[styles.commentEditRow, isRTL && styles.rowReverse]}>
+            <TextInput
+              style={styles.commentEditInput}
+              value={editingCommentTextById[comment.comment_id] || ''}
+              onChangeText={(value) =>
+                setEditingCommentTextById((prev) => ({ ...prev, [comment.comment_id]: value }))
+              }
+              editable={!commentLoadingByPost[postId]}
+            />
+            <TouchableOpacity onPress={() => saveEditedComment(postId, comment.comment_id)}>
+              <Text style={styles.commentSaveText}>{t('feedCommentSave')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity onPress={() => cancelEditComment(postId)}>
+              <Text style={styles.commentCancelText}>{t('feedCommentCancel')}</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <Text style={[styles.commentText, isRTL && styles.textRight]}>{comment.text}</Text>
+        )}
+        {comment.replies.map((reply) => renderCommentNode(reply, postId, depth + 1))}
+      </View>
+    );
+  };
+
   const renderPost = ({ item }: { item: LocalPost }) => {
     const isHighlighted = highlightPostId === item.post_id;
+    const postBadge = getPostBadge(item.comments_count || 0);
+    const currentReaction = reactionByPost[item.post_id] || item.user_reaction;
+    const reactionCounts = reactionCountsByPost[item.post_id] || item.reaction_counts || {};
+    const isSaved = savedByPost[item.post_id] ?? !!item.is_bookmarked;
+    const poll = item.poll;
     return (
     <Animated.View
       style={[
@@ -803,6 +1268,32 @@ function FeedScreen() {
           </Text>
         </View>
       ) : null}
+      {postBadge ? (
+        <View style={[styles.hotPostBadge, styles[`hotBadge_${postBadge.tone}`]]}>
+          <Text style={styles.hotPostBadgeText}>{postBadge.icon} {postBadge.label}</Text>
+        </View>
+      ) : null}
+      {poll ? (
+        <View style={styles.pollCard}>
+          <Text style={styles.pollTitle}>{poll.question}</Text>
+          {poll.options.map((option) => {
+            const percentage = poll.total_votes > 0 ? Math.round(((option.votes_count || 0) / poll.total_votes) * 100) : 0;
+            const selected = poll.user_vote === option.option_id;
+            return (
+            <TouchableOpacity
+              key={option.option_id}
+              style={[styles.pollOption, selected && styles.pollOptionSelected]}
+              onPress={() => void votePollOption(item, option.option_id)}
+            >
+              <View style={[styles.pollFill, { width: `${percentage}%` }]} />
+              <Text style={styles.pollOptionText}>{option.text}</Text>
+              <Text style={styles.pollPercent}>{percentage}%</Text>
+            </TouchableOpacity>
+            );
+          })}
+          <Text style={styles.pollVotesText}>{poll.total_votes} ääntä</Text>
+        </View>
+      ) : null}
 
       {item.image ? (
         <View style={styles.postImageWrap}>
@@ -853,18 +1344,24 @@ function FeedScreen() {
       ) : null}
 
       <View style={[styles.postActions, isRTL && styles.rowReverse]}>
-        <TouchableOpacity
-          style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
-          onPress={() => handleLike(item)}
-          disabled={likeLoadingByPost[item.post_id]}
-        >
-          <Ionicons
-            name={item.is_liked ? 'heart' : 'heart-outline'}
-            size={24}
-            color={item.is_liked ? '#FF3B30' : '#666'}
-          />
+        <View style={[styles.reactionGroup, isRTL && styles.rowReverse]}>
+          {reactionOptions.map((reaction) => (
+            <TouchableOpacity
+              key={reaction.key}
+              style={[
+                styles.reactionButton,
+                currentReaction === reaction.key && styles.reactionButtonActive,
+              ]}
+              onPress={() => handleReaction(item, reaction.key)}
+              disabled={likeLoadingByPost[item.post_id]}
+            >
+              <Text style={styles.reactionEmoji}>{reaction.emoji}</Text>
+              <Text style={styles.reactionLabel}>{reaction.label}</Text>
+              <Text style={styles.reactionCount}>{reactionCounts[reaction.key] || 0}</Text>
+            </TouchableOpacity>
+          ))}
           <Text style={[styles.actionText, isRTL && styles.actionTextRTL]}>{item.likes_count}</Text>
-        </TouchableOpacity>
+        </View>
 
         <TouchableOpacity
           style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
@@ -886,57 +1383,26 @@ function FeedScreen() {
           )}
           <Text style={[styles.actionText, isRTL && styles.actionTextRTL]}>{item.repost_count || 0}</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
+          onPress={() => void toggleSavePost(item)}
+        >
+          <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={21} color={isSaved ? '#0F62FE' : '#666'} />
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
+          onPress={() => void sharePost(item)}
+        >
+          <Ionicons name="share-social-outline" size={21} color="#666" />
+        </TouchableOpacity>
       </View>
 
       {expandedComments[item.post_id] && (
         <View style={styles.commentsContainer}>
           {(item.comments || []).length > 0 ? (
-            (item.comments || []).map((comment) => {
-              const isOwnComment = user?.user_id === comment.user_id;
-              const isEditing = editingCommentIdByPost[item.post_id] === comment.comment_id;
-              const isOnline = Boolean((comment as { is_online?: boolean }).is_online);
-              return (
-                <View key={comment.comment_id} style={styles.commentRow}>
-                  <View style={[styles.commentTopRow, isRTL && styles.rowReverse]}>
-                    <View style={styles.commentAuthorWrap}>
-                      <Text style={[styles.commentAuthor, isRTL && styles.textRight]}>{comment.username}</Text>
-                      {isOnline ? <View style={styles.commentPresenceDot} /> : null}
-                    </View>
-                    {isOwnComment && !isEditing && (
-                      <View style={[styles.commentActionRow, isRTL && styles.rowReverse]}>
-                        <TouchableOpacity onPress={() => startEditComment(item.post_id, comment)}>
-                          <Text style={styles.commentActionText}>{t('feedCommentEdit')}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => confirmDeleteComment(item.post_id, comment.comment_id)}>
-                          <Text style={[styles.commentActionText, styles.commentDeleteText]}>{t('feedCommentDelete')}</Text>
-                        </TouchableOpacity>
-                      </View>
-                    )}
-                  </View>
-
-                  {isEditing ? (
-                    <View style={[styles.commentEditRow, isRTL && styles.rowReverse]}>
-                      <TextInput
-                        style={styles.commentEditInput}
-                        value={editingCommentTextById[comment.comment_id] || ''}
-                        onChangeText={(value) =>
-                          setEditingCommentTextById((prev) => ({ ...prev, [comment.comment_id]: value }))
-                        }
-                        editable={!commentLoadingByPost[item.post_id]}
-                      />
-                      <TouchableOpacity onPress={() => saveEditedComment(item.post_id, comment.comment_id)}>
-                        <Text style={styles.commentSaveText}>{t('feedCommentSave')}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity onPress={() => cancelEditComment(item.post_id)}>
-                        <Text style={styles.commentCancelText}>{t('feedCommentCancel')}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  ) : (
-                    <Text style={[styles.commentText, isRTL && styles.textRight]}>{comment.text}</Text>
-                  )}
-                </View>
-              );
-            })
+            buildCommentTree(item.comments || []).map((comment) => renderCommentNode(comment, item.post_id))
           ) : (
             <Text style={styles.noCommentsText}>{t('feedNoComments')}</Text>
           )}
@@ -981,30 +1447,8 @@ function FeedScreen() {
     return renderPost({ item: item.post });
   };
 
-  if (loading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#007AFF" />
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.container}>
-      {interstitialVisible ? (
-        <View style={styles.interstitialOverlay}>
-          <View style={styles.interstitialCard}>
-            <Text style={[styles.interstitialLabel, isRTL && styles.textRight]}>{t('feedInterstitial')}</Text>
-            <Text style={styles.interstitialTitle}>
-              {adConfig.network_tag ? `${t('feedAdNetwork')} · ${adConfig.network_tag}` : t('feedAdNetwork')}
-            </Text>
-            <Text style={[styles.interstitialText, isRTL && styles.textRight]}>{t('feedInterstitialActive')}</Text>
-            <TouchableOpacity style={styles.interstitialCloseButton} onPress={() => setInterstitialVisible(false)}>
-              <Text style={styles.interstitialCloseText}>{t('feedCloseAd')}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
+  const renderIntroStack = () => (
+    <>
       <View style={styles.feedFilterRow}>
         <TouchableOpacity
           style={[styles.feedFilterButton, !followingOnly && styles.feedFilterButtonActive]}
@@ -1019,7 +1463,7 @@ function FeedScreen() {
           <Text style={[styles.feedFilterText, followingOnly && styles.feedFilterTextActive]}>{t('feedFollowing')}</Text>
         </TouchableOpacity>
       </View>
-      {adConfig.placements.sidebar && width >= 768 ? (
+      {adConfig.placements.sidebar && isDesktop ? (
         <View style={styles.sidebarAd}>
           <Text style={[styles.adLabel, isRTL && styles.textRight]}>{t('feedAdNetwork')}</Text>
           <Text style={[styles.adText, isRTL && styles.textRight]}>{t('feedInterstitialActive')}</Text>
@@ -1056,32 +1500,96 @@ function FeedScreen() {
           </View>
         </View>
       ) : null}
-      <FlatList
-        data={feedItems}
-        renderItem={renderFeedItem}
-        keyExtractor={(item) => item.type === 'post' ? item.post.post_id : item.id}
-        viewabilityConfig={{
-          itemVisiblePercentThreshold: 60,
-          minimumViewTime: 300,
-        }}
-        onViewableItemsChanged={onViewableItemsChanged}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name={feedError ? 'cloud-offline-outline' : 'paper-plane-outline'} size={64} color="#ccc" />
-            <Text style={styles.emptyText}>{feedError ? t('feedLoadFailed') : t('feedNoPosts')}</Text>
-            <Text style={styles.emptySubtext}>{feedError ? t('feedLoadFailedBody') : t('feedCreateFirstPost')}</Text>
-            {feedError ? (
-              <TouchableOpacity style={styles.emptyRetryButton} onPress={() => void fetchFeed()}>
-                <Text style={styles.emptyRetryText}>{t('retry')}</Text>
-              </TouchableOpacity>
-            ) : null}
+    </>
+  );
+
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#007AFF" />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      {interstitialVisible ? (
+        <View style={styles.interstitialOverlay}>
+          <View style={styles.interstitialCard}>
+            <Text style={[styles.interstitialLabel, isRTL && styles.textRight]}>{t('feedInterstitial')}</Text>
+            <Text style={styles.interstitialTitle}>
+              {adConfig.network_tag ? `${t('feedAdNetwork')} · ${adConfig.network_tag}` : t('feedAdNetwork')}
+            </Text>
+            <Text style={[styles.interstitialText, isRTL && styles.textRight]}>{t('feedInterstitialActive')}</Text>
+            <TouchableOpacity style={styles.interstitialCloseButton} onPress={() => setInterstitialVisible(false)}>
+              <Text style={styles.interstitialCloseText}>{t('feedCloseAd')}</Text>
+            </TouchableOpacity>
           </View>
-        }
-        contentContainerStyle={posts.length === 0 ? styles.emptyList : null}
-      />
+        </View>
+      ) : null}
+      {isDesktop ? (
+        <View style={styles.desktopDashboard}>
+          <ScrollView style={styles.leftRail} contentContainerStyle={styles.railContent}>
+            {renderTrendingNow()}
+            {renderPhenomenaPanel()}
+            {renderWeeklyChallenge()}
+            {renderGamificationPanel()}
+          </ScrollView>
+          <FlatList
+            style={styles.centerFeed}
+            data={feedItems}
+            renderItem={renderFeedItem}
+            keyExtractor={(item) => item.type === 'post' ? item.post.post_id : item.id}
+            viewabilityConfig={{ itemVisiblePercentThreshold: 60, minimumViewTime: 300 }}
+            onViewableItemsChanged={onViewableItemsChanged}
+            refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+            ListHeaderComponent={renderIntroStack}
+            ListEmptyComponent={
+              <View style={styles.emptyContainer}>
+                <Ionicons name={feedError ? 'cloud-offline-outline' : 'paper-plane-outline'} size={64} color="#fb7185" />
+                <Text style={styles.emptyText}>{feedError ? t('feedLoadFailed') : t('feedNoPosts')}</Text>
+                <Text style={styles.emptySubtext}>{feedError ? t('feedLoadFailedBody') : t('feedCreateFirstPost')}</Text>
+              </View>
+            }
+          />
+          <ScrollView style={styles.rightRail} contentContainerStyle={styles.railContent}>
+            {renderLiveNowSection()}
+            {renderUpcomingStreams()}
+            {renderDailyQuestion()}
+          </ScrollView>
+        </View>
+      ) : (
+        <FlatList
+          data={feedItems}
+          renderItem={renderFeedItem}
+          keyExtractor={(item) => item.type === 'post' ? item.post.post_id : item.id}
+          viewabilityConfig={{ itemVisiblePercentThreshold: 60, minimumViewTime: 300 }}
+          onViewableItemsChanged={onViewableItemsChanged}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          ListHeaderComponent={
+            <>
+              {renderLiveNowSection()}
+              {renderDailyQuestion()}
+              {renderTrendingNow()}
+              {renderIntroStack()}
+            </>
+          }
+          ListFooterComponent={renderWeeklyChallenge}
+          ListEmptyComponent={
+            <View style={styles.emptyContainer}>
+              <Ionicons name={feedError ? 'cloud-offline-outline' : 'paper-plane-outline'} size={64} color="#fb7185" />
+              <Text style={styles.emptyText}>{feedError ? t('feedLoadFailed') : t('feedNoPosts')}</Text>
+              <Text style={styles.emptySubtext}>{feedError ? t('feedLoadFailedBody') : t('feedCreateFirstPost')}</Text>
+              {feedError ? (
+                <TouchableOpacity style={styles.emptyRetryButton} onPress={() => void fetchFeed()}>
+                  <Text style={styles.emptyRetryText}>{t('retry')}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          }
+          contentContainerStyle={posts.length === 0 ? styles.emptyList : styles.mobileFeedContent}
+        />
+      )}
     </View>
   );
 }
@@ -1091,13 +1599,566 @@ export default FeedScreen;
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fff7ed',
+  },
+  desktopDashboard: {
+    flex: 1,
+    flexDirection: 'row',
+    gap: 14,
+    padding: 14,
+    backgroundColor: '#fff7ed',
+  },
+  leftRail: {
+    width: 286,
+    flexShrink: 0,
+  },
+  rightRail: {
+    width: 306,
+    flexShrink: 0,
+  },
+  centerFeed: {
+    flex: 1,
+    minWidth: 0,
+  },
+  railContent: {
+    gap: 12,
+    paddingBottom: 24,
+  },
+  mobileFeedContent: {
+    paddingBottom: 18,
+  },
+  liveNowSection: {
+    backgroundColor: '#1a0710',
+    borderWidth: 1,
+    borderColor: '#fb7185',
+    borderRadius: 18,
+    paddingTop: 12,
+    paddingBottom: 10,
+    marginHorizontal: 12,
+    marginTop: 10,
+    shadowColor: '#ef4444',
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+  },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    gap: 10,
+  },
+  feedSectionTitle: {
+    fontSize: 16,
+    fontWeight: '900',
+    color: '#111827',
+  },
+  lightSectionTitle: {
+    color: '#fff',
+  },
+  livePulseText: {
+    color: '#fff',
+    backgroundColor: '#ef4444',
+    borderRadius: 999,
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  liveScroller: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    gap: 12,
+  },
+  liveHostCard: {
+    width: 88,
+    alignItems: 'center',
+    gap: 5,
+  },
+  liveAvatarRing: {
+    width: 58,
+    height: 58,
+    borderRadius: 29,
+    borderWidth: 3,
+    borderColor: '#ef4444',
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#ef4444',
+    shadowOpacity: 0.28,
+    shadowRadius: 10,
+    elevation: 3,
+  },
+  liveAvatarInitial: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  liveBadge: {
+    position: 'absolute',
+    bottom: -5,
+    borderRadius: 999,
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  liveBadgeText: {
+    color: '#fff',
+    fontSize: 8,
+    fontWeight: '900',
+  },
+  liveHostName: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '800',
+    maxWidth: 78,
+  },
+  liveTopic: {
+    color: '#fecdd3',
+    fontSize: 11,
+    maxWidth: 78,
+  },
+  liveViewerCount: {
+    color: '#fca5a5',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  dailyQuestionCard: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#a78bfa',
+    backgroundColor: '#312e81',
+    paddingVertical: 14,
+    shadowColor: '#7c3aed',
+    shadowOpacity: 0.18,
+    shadowRadius: 14,
+  },
+  dailyQuestionText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: '900',
+    lineHeight: 24,
+    paddingHorizontal: 12,
+    marginTop: 10,
+  },
+  dailyVoteRow: {
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    marginTop: 12,
+  },
+  dailyVoteButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  dailyVoteButtonActive: {
+    borderColor: '#facc15',
+    backgroundColor: 'rgba(250,204,21,0.16)',
+  },
+  dailyVoteFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(34,197,94,0.32)',
+  },
+  dailyVoteFillNo: {
+    backgroundColor: 'rgba(239,68,68,0.32)',
+  },
+  dailyVoteText: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  dailyVotePercent: {
+    position: 'absolute',
+    right: 10,
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  dailyVoteMeta: {
+    color: '#ddd6fe',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 8,
+    paddingHorizontal: 12,
+  },
+  challengeCard: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    backgroundColor: '#fff7ed',
+    padding: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  challengeIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#ea580c',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  challengeKicker: {
+    color: '#9a3412',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  challengeTitle: {
+    color: '#111827',
+    fontSize: 16,
+    fontWeight: '900',
+    marginTop: 2,
+  },
+  challengeBody: {
+    color: '#7c2d12',
+    fontSize: 13,
+    marginTop: 2,
+    lineHeight: 18,
+  },
+  trendingSection: {
+    marginTop: 10,
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    paddingVertical: 12,
+  },
+  trendingScroller: {
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    gap: 10,
+  },
+  trendingCard: {
+    width: 230,
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 12,
+    gap: 6,
+    backgroundColor: '#fff',
+  },
+  trendingBadge: {
+    fontSize: 12,
+    fontWeight: '900',
+    color: '#111827',
+  },
+  trendingTitle: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 19,
+  },
+  trendingMeta: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  trendingEmptyCard: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    padding: 14,
+  },
+  trendingEmptyTitle: {
+    color: '#111827',
+    fontWeight: '900',
+    marginBottom: 3,
+  },
+  trendingEmptyBody: {
+    color: '#64748b',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  hotBadge_phenomenon: {
+    backgroundColor: '#ecfccb',
+    borderColor: '#a3e635',
+  },
+  hotBadge_comet: {
+    backgroundColor: '#eef2ff',
+    borderColor: '#8b5cf6',
+  },
+  hotBadge_hot: {
+    backgroundColor: '#ffedd5',
+    borderColor: '#f97316',
+  },
+  hotBadge_rising: {
+    backgroundColor: '#fefce8',
+    borderColor: '#facc15',
+  },
+  gamificationPanel: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#eff6ff',
+    paddingVertical: 12,
+  },
+  phenomenaPanel: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#bef264',
+    backgroundColor: '#f7fee7',
+    padding: 14,
+    gap: 10,
+  },
+  phenomenonRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#d9f99d',
+    padding: 10,
+  },
+  phenomenonRank: {
+    color: '#3f6212',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  phenomenonTag: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  phenomenonMeta: {
+    color: '#4d7c0f',
+    fontSize: 11,
+    fontWeight: '800',
+    marginTop: 1,
+  },
+  upcomingPanel: {
+    marginHorizontal: 12,
+    marginTop: 10,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#93c5fd',
+    backgroundColor: '#eff6ff',
+    padding: 14,
+    gap: 10,
+  },
+  streamRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 13,
+    backgroundColor: '#fff',
+    padding: 10,
+  },
+  streamTime: {
+    color: '#1d4ed8',
+    fontSize: 12,
+    fontWeight: '900',
+    minWidth: 58,
+  },
+  streamTitle: {
+    flex: 1,
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  pointsBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    backgroundColor: '#fef3c7',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  pointsBadgeText: {
+    color: '#92400e',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  streakRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingTop: 10,
+  },
+  streakPill: {
+    minWidth: 86,
+    borderRadius: 14,
+    backgroundColor: '#111827',
+    padding: 10,
+    alignItems: 'center',
+  },
+  streakValue: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  streakLabel: {
+    color: '#cbd5e1',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  achievementBadge: {
+    flexGrow: 1,
+    minWidth: 145,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 14,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    padding: 10,
+  },
+  achievementTitle: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  achievementValue: {
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 1,
+  },
+  liveModal: {
+    flex: 1,
+    backgroundColor: '#050816',
+    padding: 16,
+    gap: 14,
+  },
+  liveVideoShell: {
+    flex: 1,
+    minHeight: 340,
+    borderRadius: 22,
+    backgroundColor: '#111827',
+    borderWidth: 1,
+    borderColor: '#374151',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  liveModalBadge: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    color: '#fff',
+    backgroundColor: '#ef4444',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  liveModalTitle: {
+    color: '#fff',
+    fontSize: 28,
+    fontWeight: '900',
+    marginTop: 12,
+  },
+  liveModalTopic: {
+    color: '#cbd5e1',
+    fontSize: 14,
+    marginTop: 4,
+  },
+  floatingReactionOne: {
+    position: 'absolute',
+    right: 26,
+    bottom: 70,
+  },
+  floatingReactionTwo: {
+    position: 'absolute',
+    right: 72,
+    bottom: 130,
+  },
+  floatingReactionText: {
+    fontSize: 34,
+  },
+  liveOverlayGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  liveChatPanel: {
+    flex: 1,
+    minWidth: 230,
+    borderRadius: 16,
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+    borderWidth: 1,
+    borderColor: '#334155',
+    padding: 14,
+    gap: 8,
+  },
+  liveSidePanel: {
+    flex: 1,
+    minWidth: 230,
+    borderRadius: 16,
+    backgroundColor: 'rgba(15, 23, 42, 0.92)',
+    borderWidth: 1,
+    borderColor: '#334155',
+    padding: 14,
+    gap: 8,
+  },
+  livePanelTitle: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  liveChatLine: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  guestModeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: '#2563eb',
+    padding: 10,
+    marginTop: 4,
+  },
+  guestModeText: {
+    color: '#fff',
+    fontWeight: '900',
+  },
+  liveExitButton: {
+    alignSelf: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 999,
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+  },
+  liveExitText: {
+    color: '#111827',
+    fontWeight: '900',
+    fontSize: 15,
   },
   feedFilterRow: {
     flexDirection: 'row',
     backgroundColor: '#fff',
-    borderBottomWidth: 1,
-    borderBottomColor: '#ececec',
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    borderRadius: 16,
+    marginHorizontal: 12,
+    marginTop: 10,
     paddingHorizontal: 12,
     paddingVertical: 8,
     gap: 8,
@@ -1127,12 +2188,16 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#fff7ed',
   },
   postCard: {
     backgroundColor: '#fff',
-    marginBottom: 8,
+    marginHorizontal: 12,
+    marginBottom: 10,
     padding: 16,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#ffe4c7',
   },
   adCard: {
     backgroundColor: '#FFF7E6',
@@ -1444,14 +2509,52 @@ const styles = StyleSheet.create({
   postActions: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 10,
     paddingTop: 8,
     borderTopWidth: 1,
     borderTopColor: '#f0f0f0',
   },
+  reactionGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginRight: 10,
+  },
+  reactionButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  reactionButtonActive: {
+    borderColor: '#f97316',
+    backgroundColor: '#fff7ed',
+  },
+  reactionEmoji: {
+    fontSize: 14,
+  },
+  reactionLabel: {
+    color: '#374151',
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  reactionCount: {
+    color: '#111827',
+    fontSize: 11,
+    fontWeight: '900',
+    minWidth: 12,
+    textAlign: 'center',
+  },
   actionButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginRight: 24,
+    marginRight: 12,
   },
   actionButtonRTL: {
     marginRight: 0,
@@ -1474,6 +2577,14 @@ const styles = StyleSheet.create({
   },
   commentRow: {
     marginBottom: 8,
+    borderRadius: 10,
+    paddingVertical: 4,
+  },
+  commentReplyRow: {
+    borderLeftWidth: 2,
+    borderLeftColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    paddingLeft: 10,
   },
   commentTopRow: {
     flexDirection: 'row',
@@ -1521,6 +2632,70 @@ const styles = StyleSheet.create({
     color: '#92400e',
     fontWeight: '800',
     fontSize: 12,
+  },
+  hotPostBadge: {
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    marginBottom: 10,
+  },
+  hotPostBadgeText: {
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  pollCard: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    borderRadius: 14,
+    padding: 12,
+    gap: 8,
+    marginBottom: 14,
+  },
+  pollTitle: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  pollOption: {
+    minHeight: 38,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    overflow: 'hidden',
+    justifyContent: 'center',
+    paddingHorizontal: 10,
+  },
+  pollOptionSelected: {
+    borderColor: '#0F62FE',
+    backgroundColor: '#eff6ff',
+  },
+  pollFill: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: '#dbeafe',
+  },
+  pollOptionText: {
+    color: '#1e3a8a',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  pollPercent: {
+    position: 'absolute',
+    right: 10,
+    color: '#1e40af',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  pollVotesText: {
+    color: '#64748b',
+    fontSize: 12,
+    fontWeight: '800',
   },
   commentText: {
     fontSize: 14,
