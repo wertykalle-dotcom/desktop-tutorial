@@ -352,7 +352,7 @@ export default function AdminWebScreen() {
   };
 
   const broadcastMessage = async () => {
-    const message = (window.prompt('Broadcast message') || '').trim();
+    const message = (window.prompt(t('adminBroadcastMessagePrompt')) || '').trim();
     if (!message) return;
     const response = await apiFetch('/admin/notifications/broadcast', {
       method: 'POST',
@@ -405,7 +405,7 @@ export default function AdminWebScreen() {
               <Text className="text-white">{t('adminBroadcast')}</Text>
             </Pressable>
             <Pressable className={secondaryButton} onPress={() => void refreshDashboard()}>
-              <Text className="text-slate-100">Refresh dashboard</Text>
+              <Text className="text-slate-100">{t('adminRefreshDashboard')}</Text>
             </Pressable>
             <Pressable className={secondaryButton} onPress={() => void refreshExchangeRates()}>
               <Text className="text-slate-100">{t('adminRatesRefresh')}</Text>
@@ -425,7 +425,7 @@ export default function AdminWebScreen() {
           <Text className="mt-2 text-sm text-slate-400">
             {systemOverview?.updated_at ? `${t('adminRatesUpdatedAt')}: ${systemOverview.updated_at}` : t('adminNoData')}
           </Text>
-          <Text className="mt-1 text-xs uppercase tracking-wider text-slate-500">Last synced: {overviewUpdatedAt}</Text>
+          <Text className="mt-1 text-xs uppercase tracking-wider text-slate-500">{t('adminLastSynced')}: {overviewUpdatedAt}</Text>
           <View className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             {overviewCards.map((item) => cardMetric(item.label, item.value))}
           </View>

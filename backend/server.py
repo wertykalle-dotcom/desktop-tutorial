@@ -23,6 +23,18 @@ from fastapi.responses import StreamingResponse, JSONResponse
 import sqlite3
 import asyncio
 import ipaddress
+import io
+import shutil
+import subprocess
+import tempfile
+
+from PIL import Image, ImageOps
+
+try:
+    import pillow_heif
+    pillow_heif.register_heif_opener()
+except Exception:  # pragma: no cover - optional HEIC support
+    pillow_heif = None
 
 try:
     from openai import AsyncOpenAI
@@ -128,6 +140,107 @@ app = FastAPI(title="Social Media API", lifespan=lifespan)
 uploads_dir = ROOT_DIR / 'uploads'
 uploads_dir.mkdir(exist_ok=True)
 app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+
+ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
+ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
+MAX_IMAGE_WIDTH = 1600
+IMAGE_WEBP_QUALITY = 82
+
+
+def _upload_extension(upload: UploadFile) -> str:
+    return Path(upload.filename or "").suffix.lower()
+
+
+def _validate_upload_extension(upload: UploadFile, allowed: set[str], media_label: str) -> str:
+    ext = _upload_extension(upload)
+    if ext not in allowed:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported {media_label} type. Allowed: {', '.join(sorted(allowed))}",
+        )
+    return ext
+
+
+def optimize_image_upload(contents: bytes, upload: UploadFile, post_id: str) -> str:
+    ext = _validate_upload_extension(upload, ALLOWED_IMAGE_EXTENSIONS, "image")
+    if ext in {".heic", ".heif"} and pillow_heif is None:
+        raise HTTPException(
+            status_code=415,
+            detail="HEIC image support requires pillow-heif on the backend.",
+        )
+
+    try:
+        image = Image.open(io.BytesIO(contents))
+        image = ImageOps.exif_transpose(image)
+        image.thumbnail((MAX_IMAGE_WIDTH, MAX_IMAGE_WIDTH * 2), Image.Resampling.LANCZOS)
+        if image.mode not in ("RGB", "RGBA"):
+            image = image.convert("RGBA" if "A" in image.getbands() else "RGB")
+
+        filename = f"{post_id}.webp"
+        out_path = uploads_dir / filename
+        image.save(out_path, "WEBP", quality=IMAGE_WEBP_QUALITY, method=6)
+        return f"/uploads/{filename}"
+    except HTTPException:
+        raise
+    except Exception as exc:
+        logger.error("Error optimizing uploaded image: %s", exc)
+        raise HTTPException(status_code=500, detail="Failed to optimize uploaded image")
+
+
+def transcode_video_upload(contents: bytes, upload: UploadFile, post_id: str) -> str:
+    ext = _validate_upload_extension(upload, ALLOWED_VIDEO_EXTENSIONS, "video")
+    ffmpeg_path = shutil.which("ffmpeg")
+
+    if ffmpeg_path is None:
+        if ext == ".mp4":
+            filename = f"{post_id}.mp4"
+            out_path = uploads_dir / filename
+            with open(out_path, "wb") as file:
+                file.write(contents)
+            return f"/uploads/{filename}"
+        raise HTTPException(
+            status_code=500,
+            detail="Video transcoding requires ffmpeg on the backend.",
+        )
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = Path(tmpdir) / f"input{ext}"
+        output_path = Path(tmpdir) / "output.mp4"
+        input_path.write_bytes(contents)
+        command = [
+            ffmpeg_path,
+            "-y",
+            "-i",
+            str(input_path),
+            "-map_metadata",
+            "-1",
+            "-vf",
+            "scale='min(1280,iw)':-2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        if result.returncode != 0 or not output_path.exists():
+            logger.error("ffmpeg failed for %s: %s", upload.filename, result.stderr[-1000:])
+            raise HTTPException(status_code=500, detail="Failed to transcode uploaded video")
+
+        filename = f"{post_id}.mp4"
+        out_path = uploads_dir / filename
+        shutil.move(str(output_path), out_path)
+        return f"/uploads/{filename}"
 
 RATE_LIMIT_BUCKETS: Dict[str, Dict[str, Any]] = {}
 RATE_LIMITS = {
@@ -875,11 +988,7 @@ def build_community_suggestions_from_topics(topics: List[Dict[str, Any]], limit:
     ]
     if communities:
         return communities
-    return [
-        {"name": "Design Lab", "members": 120, "description": "Teemallinen yhteisö UI-ideoille ja palautteelle."},
-        {"name": "Builders FI", "members": 84, "description": "Kehittäjille ja tekijöille suunnattu yhteisö."},
-        {"name": "Launch Crew", "members": 56, "description": "Lanseeraukset, luonnokset ja yhteisöpilotit."},
-    ]
+    return []
 
 def normalize_community_name(name: str) -> str:
     cleaned = " ".join(part for part in str(name or "").strip().split() if part)
@@ -1951,6 +2060,51 @@ def get_sqlite_connection() -> sqlite3.Connection:
         raise RuntimeError("SQLite database is not configured")
     conn = sqlite3.connect(SQLITE_DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES)
     conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS messages (
+        message_id TEXT PRIMARY KEY,
+        thread_id TEXT,
+        sender_user_id TEXT,
+        sender_username TEXT,
+        recipient_user_id TEXT,
+        text TEXT,
+        created_at TEXT,
+        is_read INTEGER DEFAULT 0
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS message_presence (
+        thread_id TEXT,
+        user_id TEXT,
+        username TEXT,
+        is_typing INTEGER DEFAULT 0,
+        updated_at TEXT,
+        PRIMARY KEY (thread_id, user_id)
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS user_presence (
+        user_id TEXT PRIMARY KEY,
+        username TEXT,
+        last_active_at TEXT
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS community_memberships (
+        membership_id TEXT PRIMARY KEY,
+        user_id TEXT,
+        community_name TEXT,
+        created_at TEXT,
+        UNIQUE(user_id, community_name)
+    )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_presence_thread_updated ON message_presence(thread_id, updated_at DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_thread_id_created_at ON messages(thread_id, created_at DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient_is_read ON messages(recipient_user_id, is_read)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_presence_last_active ON user_presence(last_active_at DESC)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_community_memberships_name ON community_memberships(community_name)")
+    conn.commit()
     return conn
 
 def sqlite_get_messages_for_thread(user_id: str, thread_id: str, limit: int = 50) -> List[Dict[str, Any]]:
@@ -4699,21 +4853,9 @@ async def create_post(
     if image is not None:
         try:
             contents = await image.read()
-            # Determine extension from content type
-            content_type = (image.content_type or '').lower()
-            if 'jpeg' in content_type or 'jpg' in content_type:
-                ext = '.jpg'
-            elif 'png' in content_type:
-                ext = '.png'
-            else:
-                ext = ''
-
-            filename = f"{post_id}{ext}"
-            out_path = uploads_dir / filename
-            with open(out_path, 'wb') as f:
-                f.write(contents)
-
-            image_url = f"/uploads/{filename}"
+            image_url = optimize_image_upload(contents, image, post_id)
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error saving uploaded image: {e}")
             raise HTTPException(status_code=500, detail="Failed to save uploaded image")
@@ -4722,20 +4864,9 @@ async def create_post(
     if video is not None:
         try:
             contents = await video.read()
-            content_type = (video.content_type or '').lower()
-            if 'mp4' in content_type:
-                ext = '.mp4'
-            elif 'mov' in content_type or 'quicktime' in content_type:
-                ext = '.mov'
-            elif 'webm' in content_type:
-                ext = '.webm'
-            else:
-                ext = '.mp4'
-            filename = f"{post_id}{ext}"
-            out_path = uploads_dir / filename
-            with open(out_path, 'wb') as f:
-                f.write(contents)
-            video_url = f"/uploads/{filename}"
+            video_url = transcode_video_upload(contents, video, post_id)
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Error saving uploaded video: {e}")
             raise HTTPException(status_code=500, detail="Failed to save uploaded video")
@@ -6890,12 +7021,6 @@ async def get_communities_directory(
         }
         for topic in topics[:5]
     ]
-    if not communities:
-        communities = [
-            {"name": "Design Lab", "members": 120 + await get_community_membership_count("Design Lab"), "description": "Teemallinen yhteisö UI-ideoille ja palautteelle.", "is_member": "Design Lab" in memberships},
-            {"name": "Builders FI", "members": 84 + await get_community_membership_count("Builders FI"), "description": "Kehittäjille ja tekijöille suunnattu yhteisö.", "is_member": "Builders FI" in memberships},
-            {"name": "Launch Crew", "members": 56 + await get_community_membership_count("Launch Crew"), "description": "Lanseeraukset, luonnokset ja yhteisöpilotit.", "is_member": "Launch Crew" in memberships},
-        ]
     return CommunitiesDirectoryResponse(
         communities=[CommunityItem(**community) for community in communities],
     )
@@ -6963,14 +7088,7 @@ async def get_community_detail(
         posts = posts[:safe_limit]
     memberships = await get_user_community_memberships(user["user_id"])
     members = await get_community_membership_count(normalized_name)
-    if normalized_name in {"Design Lab", "Builders FI", "Launch Crew"}:
-        description = {
-            "Design Lab": "Teemallinen yhteisö UI-ideoille ja palautteelle.",
-            "Builders FI": "Kehittäjille ja tekijöille suunnattu yhteisö.",
-            "Launch Crew": "Lanseeraukset, luonnokset ja yhteisöpilotit.",
-        }[normalized_name]
-    else:
-        description = f"Yhteisöaihe #{normalized_name.lower().replace(' ', '')}."
+    description = f"Yhteisöaihe #{normalized_name.lower().replace(' ', '')}."
     detail_posts: List[CommunityPostItem] = []
     for post in posts:
         post = normalize_post_payload(post)

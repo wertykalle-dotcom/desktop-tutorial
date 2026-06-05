@@ -20,6 +20,22 @@ import { useRouter } from 'expo-router';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { apiUrl } from '../../src/utils/api/http';
 
+const IMAGE_ACCEPT = '.jpg,.jpeg,.png,.webp,.heic,.heif,image/jpeg,image/png,image/webp,image/heic,image/heif';
+const VIDEO_ACCEPT = '.mp4,.mov,.webm,video/mp4,video/quicktime,video/webm';
+
+const getFileExtension = (name: string) => {
+  const match = name.toLowerCase().match(/\.[a-z0-9]+$/);
+  return match ? match[0] : '';
+};
+
+const isAllowedImageFile = (file: File) =>
+  ['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif'].includes(getFileExtension(file.name)) ||
+  ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'].includes(file.type);
+
+const isAllowedVideoFile = (file: File) =>
+  ['.mp4', '.mov', '.webm'].includes(getFileExtension(file.name)) ||
+  ['video/mp4', 'video/quicktime', 'video/webm'].includes(file.type);
+
 export default function CreatePostScreen() {
   const [text, setText] = useState('');
   const [image, setImage] = useState<string | null>(null);
@@ -27,29 +43,82 @@ export default function CreatePostScreen() {
   const [webImageFile, setWebImageFile] = useState<File | null>(null);
   const [webVideoFile, setWebVideoFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
+  const [dragActive, setDragActive] = useState(false);
+  const [selectedFileName, setSelectedFileName] = useState('');
+  const [uploadProgress, setUploadProgress] = useState(0);
   const { token } = useAuth();
   const { t, isRTL } = useI18n();
   const router = useRouter();
+
+  const resetMedia = () => {
+    setImage(null);
+    setVideo(null);
+    setWebImageFile(null);
+    setWebVideoFile(null);
+    setSelectedFileName('');
+    setUploadProgress(0);
+  };
+
+  const applyWebImageFile = (file: File) => {
+    if (!isAllowedImageFile(file)) {
+      Alert.alert(t('error'), t('createUnsupportedImage'));
+      return;
+    }
+    setWebImageFile(file);
+    setWebVideoFile(null);
+    setVideo(null);
+    setSelectedFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') {
+        setImage(reader.result);
+      }
+    };
+    reader.onerror = () => {
+      Alert.alert(t('error'), t('createImagePickFailed'));
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const applyWebVideoFile = (file: File) => {
+    if (!isAllowedVideoFile(file)) {
+      Alert.alert(t('error'), t('createUnsupportedVideo'));
+      return;
+    }
+    setWebVideoFile(file);
+    setWebImageFile(null);
+    setImage(null);
+    setVideo(URL.createObjectURL(file));
+    setSelectedFileName(file.name);
+  };
+
+  const handleDroppedFiles = (files?: FileList | null) => {
+    if (!files?.length) return;
+    const file = files[0];
+    if (isAllowedImageFile(file)) {
+      applyWebImageFile(file);
+      return;
+    }
+    if (isAllowedVideoFile(file)) {
+      applyWebVideoFile(file);
+      return;
+    }
+    Alert.alert(t('error'), t('createUnsupportedMedia'));
+  };
 
   const pickMedia = async (kind: 'image' | 'video') => {
     try {
       if (Platform.OS === 'web') {
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = kind === 'video' ? 'video/*' : 'image/*';
+        input.accept = kind === 'video' ? VIDEO_ACCEPT : IMAGE_ACCEPT;
         input.onchange = () => {
           const file = input.files?.[0];
           if (!file) return;
           if (kind === 'video') {
-            setWebVideoFile(file);
-            setWebImageFile(null);
-            setVideo(URL.createObjectURL(file));
-            setImage(null);
+            applyWebVideoFile(file);
           } else {
-            setWebImageFile(file);
-            setWebVideoFile(null);
-            setImage(URL.createObjectURL(file));
-            setVideo(null);
+            applyWebImageFile(file);
           }
         };
         input.click();
@@ -89,10 +158,12 @@ export default function CreatePostScreen() {
           setWebImageFile(null);
           setImage(null);
           setVideo(result.assets[0].uri);
+          setSelectedFileName(result.assets[0].uri.split('/').pop() || t('createVideoSelected'));
         } else {
           setWebVideoFile(null);
           setVideo(null);
           setImage(result.assets[0].uri);
+          setSelectedFileName(result.assets[0].uri.split('/').pop() || t('createImageSelected'));
         }
       }
     } catch (error) {
@@ -107,6 +178,7 @@ export default function CreatePostScreen() {
       return;
     }
     setLoading(true);
+    setUploadProgress(0);
     try {
       const formData = new FormData();
       formData.append('text', text.trim());
@@ -162,23 +234,39 @@ export default function CreatePostScreen() {
         }
       }
 
-      const response = await fetch(apiUrl('/posts'), {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/json',
-          'X-Tunnel-Skip-Bypassing-Warning': 'true',
-        },
-        body: formData,
-      });
+      const response = Platform.OS === 'web'
+        ? await new Promise<Response>((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', apiUrl('/posts'));
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            xhr.setRequestHeader('Accept', 'application/json');
+            xhr.setRequestHeader('X-Tunnel-Skip-Bypassing-Warning', 'true');
+            xhr.upload.onprogress = (event) => {
+              if (event.lengthComputable) {
+                setUploadProgress(Math.max(1, Math.round((event.loaded / event.total) * 100)));
+              }
+            };
+            xhr.onload = () => {
+              setUploadProgress(100);
+              resolve(new Response(xhr.responseText, { status: xhr.status, statusText: xhr.statusText }));
+            };
+            xhr.onerror = () => reject(new Error('Upload failed'));
+            xhr.send(formData);
+          })
+        : await fetch(apiUrl('/posts'), {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+              Accept: 'application/json',
+              'X-Tunnel-Skip-Bypassing-Warning': 'true',
+            },
+            body: formData,
+          });
 
       if (response.ok) {
         Alert.alert(t('createSuccessTitle'), t('createSuccessBody'));
         setText('');
-        setImage(null);
-        setVideo(null);
-        setWebImageFile(null);
-        setWebVideoFile(null);
+        resetMedia();
         router.push('/(tabs)/feed');
       } else {
         const raw = await response.text();
@@ -196,10 +284,16 @@ export default function CreatePostScreen() {
       Alert.alert(t('error'), t('createFailed'));
     } finally {
       setLoading(false);
+      setUploadProgress(0);
     }
   };
 
   const showImageOptions = () => {
+    if (Platform.OS === 'web') {
+      void pickMedia('image');
+      return;
+    }
+
     Alert.alert(
       t('createChooseImage'),
       t('createChooseImagePrompt'),
@@ -239,15 +333,38 @@ export default function CreatePostScreen() {
             textAlignVertical="top"
           />
 
+          {Platform.OS === 'web' ? (
+            <View
+              style={[styles.dropZone, dragActive && styles.dropZoneActive]}
+              // @ts-ignore - react-native-web passes DOM drag events through.
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragActive(true);
+              }}
+              // @ts-ignore - react-native-web passes DOM drag events through.
+              onDragLeave={(event) => {
+                event.preventDefault();
+                setDragActive(false);
+              }}
+              // @ts-ignore - react-native-web passes DOM drop events through.
+              onDrop={(event) => {
+                event.preventDefault();
+                setDragActive(false);
+                handleDroppedFiles(event.dataTransfer?.files);
+              }}
+            >
+              <Ionicons name="cloud-upload-outline" size={28} color={dragActive ? '#007AFF' : '#64748b'} />
+              <Text style={styles.dropZoneTitle}>{t('createDropMediaTitle')}</Text>
+              <Text style={styles.dropZoneText}>{t('createDropMediaBody')}</Text>
+            </View>
+          ) : null}
+
           {image && (
             <View style={styles.imageContainer}>
-              <Image source={{ uri: image }} style={styles.selectedImage} />
+              <Image source={{ uri: image }} style={styles.selectedImage} resizeMode="contain" />
               <TouchableOpacity
                 style={styles.removeImageButton}
-                onPress={() => {
-                  setImage(null);
-                  setWebImageFile(null);
-                }}
+                onPress={resetMedia}
               >
                 <Ionicons name="close-circle" size={32} color="#fff" />
               </TouchableOpacity>
@@ -259,21 +376,22 @@ export default function CreatePostScreen() {
               <View style={styles.videoPreview}>
                 <Ionicons name="videocam" size={26} color="#fff" />
               </View>
-              <View style={{ flex: 1 }}>
+              <View style={styles.videoCopy}>
                 <Text style={styles.videoTitle}>{t('createVideoSelected')}</Text>
-                <Text style={styles.videoSub}>{video}</Text>
+                <Text style={styles.videoSub}>{selectedFileName || video}</Text>
               </View>
               <TouchableOpacity
                 style={styles.removeImageButton}
-                onPress={() => {
-                  setVideo(null);
-                  setWebVideoFile(null);
-                }}
+                onPress={resetMedia}
               >
                 <Ionicons name="close-circle" size={32} color="#fff" />
               </TouchableOpacity>
             </View>
           )}
+
+          {selectedFileName ? (
+            <Text style={styles.selectedFileName}>{selectedFileName}</Text>
+          ) : null}
 
           <View style={styles.actions}>
             <TouchableOpacity
@@ -303,6 +421,12 @@ export default function CreatePostScreen() {
               <Text style={styles.postButtonText}>{t('createPublish')}</Text>
             )}
           </TouchableOpacity>
+          {loading ? (
+            <View style={styles.progressWrap}>
+              <View style={[styles.progressBar, { width: `${Math.max(uploadProgress, 8)}%` }]} />
+              <Text style={styles.progressText}>{uploadProgress > 0 ? `${uploadProgress}%` : t('loading')}</Text>
+            </View>
+          ) : null}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -335,9 +459,41 @@ const styles = StyleSheet.create({
     color: '#000',
     marginBottom: 16,
   },
+  dropZone: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    padding: 18,
+    marginBottom: 16,
+  },
+  dropZoneActive: {
+    borderColor: '#007AFF',
+    backgroundColor: '#eff6ff',
+  },
+  dropZoneTitle: {
+    marginTop: 8,
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  dropZoneText: {
+    marginTop: 4,
+    fontSize: 13,
+    color: '#64748b',
+    textAlign: 'center',
+  },
   imageContainer: {
     position: 'relative',
+    borderRadius: 12,
+    overflow: 'hidden',
     marginBottom: 16,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
   },
   videoContainer: {
     flexDirection: 'row',
@@ -356,6 +512,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  videoCopy: {
+    flex: 1,
+    minWidth: 0,
+  },
   videoTitle: {
     fontSize: 15,
     fontWeight: '800',
@@ -368,8 +528,10 @@ const styles = StyleSheet.create({
   },
   selectedImage: {
     width: '100%',
-    height: 250,
+    maxWidth: '100%',
+    height: Platform.OS === 'web' ? 320 : 250,
     borderRadius: 12,
+    objectFit: 'contain' as any,
   },
   removeImageButton: {
     position: 'absolute',
@@ -380,6 +542,7 @@ const styles = StyleSheet.create({
   },
   actions: {
     marginBottom: 24,
+    gap: 10,
   },
   imageButton: {
     flexDirection: 'row',
@@ -418,5 +581,32 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 16,
     fontWeight: '600',
+  },
+  selectedFileName: {
+    color: '#475569',
+    fontSize: 12,
+    marginTop: -6,
+    marginBottom: 14,
+  },
+  progressWrap: {
+    height: 24,
+    marginTop: 12,
+    borderRadius: 999,
+    overflow: 'hidden',
+    backgroundColor: '#e5e7eb',
+    justifyContent: 'center',
+  },
+  progressBar: {
+    position: 'absolute',
+    left: 0,
+    top: 0,
+    bottom: 0,
+    backgroundColor: '#007AFF',
+  },
+  progressText: {
+    textAlign: 'center',
+    color: '#111827',
+    fontSize: 12,
+    fontWeight: '800',
   },
 });

@@ -19,8 +19,8 @@ export default function TabsLayout() {
   const [messageUnreadCount, setMessageUnreadCount] = useState(0);
   const [onboardingReady, setOnboardingReady] = useState(false);
   const [hasOnboarded, setHasOnboarded] = useState(true);
-  const canSeeModerationTabs = canModerate(user?.role);
-  const canSeeProjectsTab = isSuperAdmin(user?.role);
+  const canSeeAdminTabs = isSuperAdmin(user?.role);
+  const canSeeModerationTab = canModerate(user?.role);
 
   useEffect(() => {
     const resolveOnboarding = async () => {
@@ -168,7 +168,7 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="messages"
+        name="messages/index"
         options={{
           title: t('messages'),
           tabBarLabel: t('messages'),
@@ -196,39 +196,36 @@ export default function TabsLayout() {
           ),
         }}
       />
-      {canSeeModerationTabs ? (
-        <Tabs.Screen
-          name="moderation"
-          options={{
-            title: t('moderation'),
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="shield-checkmark" size={size} color={color} />
-            ),
-          }}
-        />
-      ) : null}
-      {canSeeProjectsTab ? (
-        <Tabs.Screen
-          name="projects"
-          options={{
-            title: t('projects'),
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="briefcase" size={size} color={color} />
-            ),
-          }}
-        />
-      ) : null}
-      {canSeeModerationTabs ? (
-        <Tabs.Screen
-          name="admin"
-          options={{
-            title: t('admin'),
-            tabBarIcon: ({ color, size }) => (
-              <Ionicons name="settings" size={size} color={color} />
-            ),
-          }}
-        />
-      ) : null}
+      <Tabs.Screen
+        name="moderation"
+        options={{
+          title: t('moderation'),
+          href: canSeeModerationTab ? undefined : null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="shield-checkmark" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="projects"
+        options={{
+          title: t('projects'),
+          href: canSeeAdminTabs ? undefined : null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="briefcase" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="admin"
+        options={{
+          title: t('admin'),
+          href: canSeeAdminTabs ? undefined : null,
+          tabBarIcon: ({ color, size }) => (
+            <Ionicons name="settings" size={size} color={color} />
+          ),
+        }}
+      />
       <Tabs.Screen
         name="profile"
         options={{

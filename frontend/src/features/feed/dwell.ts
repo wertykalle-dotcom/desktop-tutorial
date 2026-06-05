@@ -5,6 +5,7 @@ export type Post = {
   profile_picture?: string;
   text: string;
   image?: string;
+  video?: string;
   repost_post_id?: string | null;
   repost_count?: number;
   likes_count: number;

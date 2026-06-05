@@ -28,7 +28,7 @@ export default function AdminScreen() {
     setExchangeRatesText,
     setModerationSettings,
     loadAdminData,
-    canAccess,
+    canAccess: canAccessDashboard,
   } = useAdminDashboardData();
   const { t, isRTL } = useI18n();
   const router = useRouter();
@@ -88,12 +88,12 @@ export default function AdminScreen() {
   );
 
   useEffect(() => {
-    if (!token || !canAccess) return undefined;
+    if (!token || !canAccessDashboard) return undefined;
     const intervalId = setInterval(() => {
       void loadAdminData();
     }, 15000);
     return () => clearInterval(intervalId);
-  }, [canAccess, loadAdminData, token]);
+  }, [canAccessDashboard, loadAdminData, token]);
 
   if (!canAccess) {
     return (

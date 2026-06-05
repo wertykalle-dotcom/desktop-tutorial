@@ -53,11 +53,7 @@ export const deriveThreadsFromNotifications = (notifications: any[]): ThreadItem
     time: item.created_at || '',
   }));
 
-export const defaultCommunities: CommunityItem[] = [
-  { name: 'Design Lab', members: 120, description: 'Teemallinen yhteisö UI-ideoille ja palautteelle.' },
-  { name: 'Builders FI', members: 84, description: 'Kehittäjille ja tekijöille suunnattu yhteisö.' },
-  { name: 'Launch Crew', members: 56, description: 'Lanseeraukset, luonnokset ja yhteisöpilotit.' },
-];
+export const defaultCommunities: CommunityItem[] = [];
 
 export const defaultProjects: ProjectItem[] = [
   { name: 'Alpha launch', status: 'Luonnos', description: 'Julkaisun valmistelut ja testaus.' },

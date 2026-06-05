@@ -228,19 +228,20 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
   };
 
   const logout = async () => {
+    const previousToken = token;
+    await removeToken();
+    setTokenState(null);
+    setUser(null);
+
     try {
-      if (token) {
+      if (previousToken) {
         await fetch(apiUrl('/auth/logout'), {
           method: 'POST',
-          headers: buildApiHeaders(undefined, token),
+          headers: buildApiHeaders(undefined, previousToken),
         });
       }
     } catch (error) {
       console.error('Logout error:', error);
-    } finally {
-      await removeToken();
-      setTokenState(null);
-      setUser(null);
     }
   };
 

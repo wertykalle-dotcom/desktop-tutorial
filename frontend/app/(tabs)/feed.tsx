@@ -16,14 +16,15 @@ import {
 } from 'react-native';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { useLocalSearchParams } from 'expo-router';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { formatRelativeTime, formatLocalDate } from '../../src/utils/time';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { buildDwellEvents, getVisiblePostIds, type FeedItem as DwellFeedItem, type Post, type Comment } from '../../src/features/feed/dwell';
+import { API_BASE } from '../../src/utils/api/http';
 
-const EXPO_PUBLIC_BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || '';
-const BACKEND_BASE = EXPO_PUBLIC_BACKEND_URL.replace(/\/+$/, '').replace(/\/api$/, '');
+const BACKEND_BASE = API_BASE.replace(/\/api$/, '');
 
 // Re-export types for local use
 type LocalPost = Post;
@@ -40,6 +41,22 @@ type AdConfig = {
 };
 
 type FeedItem = DwellFeedItem | { type: 'ad'; id: string; label: string };
+
+function NativeFeedVideo({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, (videoPlayer) => {
+    videoPlayer.loop = false;
+    videoPlayer.muted = true;
+  });
+
+  return (
+    <VideoView
+      player={player}
+      nativeControls
+      contentFit="contain"
+      style={styles.nativePostVideo}
+    />
+  );
+}
 
 const moveHighlightedPostFirst = (items: LocalPost[], highlightedId?: string) => {
   if (!highlightedId) return items;
@@ -59,6 +76,7 @@ function FeedScreen() {
   const [posts, setPosts] = useState<LocalPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [feedError, setFeedError] = useState(false);
   const [followingOnly, setFollowingOnly] = useState(false);
   const [expandedComments, setExpandedComments] = useState<Record<string, boolean>>({});
   const [commentInputs, setCommentInputs] = useState<Record<string, string>>({});
@@ -98,6 +116,8 @@ function FeedScreen() {
     return `${BACKEND_BASE}${uri.startsWith('/') ? uri : `/${uri}`}`;
   };
 
+  const isVideoUrl = (uri?: string) => !!uri && /\.(mp4|mov|webm)(?:$|\?)/i.test(uri);
+
   const handleRepost = async (post: LocalPost) => {
     if (repostLoadingByPost[post.post_id]) return;
     setRepostLoadingByPost((prev) => ({ ...prev, [post.post_id]: true }));
@@ -129,12 +149,17 @@ function FeedScreen() {
     try {
       const response = await apiFetch(`/posts?following_only=${followingOnly ? 'true' : 'false'}`);
       const adResp = await apiFetch('/ads/config', {}, { requireAuth: false });
-      if (!response || response.status === 401) return;
+      if (!response || response.status === 401) {
+        setFeedError(true);
+        setPosts([]);
+        return;
+      }
 
       if (response.ok) {
         const data = await response.json();
         const normalizedPosts = Array.isArray(data) ? (data as LocalPost[]) : [];
         const orderedPosts = moveHighlightedPostFirst(normalizedPosts, highlightPostId);
+        setFeedError(false);
         setPosts(orderedPosts);
         if (highlightPostId && orderedPosts.some((post) => post.post_id === highlightPostId)) {
           setExpandedComments((prev) => ({ ...prev, [highlightPostId]: true }));
@@ -185,10 +210,13 @@ function FeedScreen() {
       } else {
         const raw = await response.text();
         console.error('Feed fetch failed:', response.status, raw);
+        setFeedError(true);
         setPosts([]);
       }
     } catch (error) {
       console.error('Error fetching feed:', error);
+      setFeedError(true);
+      setPosts([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -776,14 +804,14 @@ function FeedScreen() {
         </View>
       ) : null}
 
-      {item.image && (
+      {item.image ? (
         <View style={styles.postImageWrap}>
           <Image
             source={{ uri: resolveMediaUrl(item.image) }}
             style={[
               styles.postImage,
               imageAspectByPostId[item.post_id]
-                ? { aspectRatio: imageAspectByPostId[item.post_id], height: undefined }
+                ? { aspectRatio: imageAspectByPostId[item.post_id] }
                 : styles.postImageFallback,
             ]}
             onLoad={(event) => {
@@ -796,10 +824,33 @@ function FeedScreen() {
                   : { ...prev, [item.post_id]: aspectRatio }
               );
             }}
-            resizeMode="cover"
+            resizeMode="contain"
           />
         </View>
-      )}
+      ) : item.video && isVideoUrl(item.video) ? (
+        <View style={styles.postVideoWrap}>
+          {Platform.OS === 'web' ? (
+            React.createElement('video', {
+              src: resolveMediaUrl(item.video),
+              controls: true,
+              muted: true,
+              playsInline: true,
+              style: {
+                width: 'auto',
+                maxWidth: '100%',
+                height: 'auto',
+                maxHeight: 400,
+                display: 'block',
+                objectFit: 'contain',
+                backgroundColor: 'transparent',
+                borderRadius: 8,
+              },
+            })
+          ) : (
+            <NativeFeedVideo uri={resolveMediaUrl(item.video) || item.video} />
+          )}
+        </View>
+      ) : null}
 
       <View style={[styles.postActions, isRTL && styles.rowReverse]}>
         <TouchableOpacity
@@ -1019,9 +1070,14 @@ function FeedScreen() {
         }
         ListEmptyComponent={
           <View style={styles.emptyContainer}>
-            <Ionicons name="paper-plane-outline" size={64} color="#ccc" />
-            <Text style={styles.emptyText}>{t('feedNoPosts')}</Text>
-            <Text style={styles.emptySubtext}>{t('feedCreateFirstPost')}</Text>
+            <Ionicons name={feedError ? 'cloud-offline-outline' : 'paper-plane-outline'} size={64} color="#ccc" />
+            <Text style={styles.emptyText}>{feedError ? t('feedLoadFailed') : t('feedNoPosts')}</Text>
+            <Text style={styles.emptySubtext}>{feedError ? t('feedLoadFailedBody') : t('feedCreateFirstPost')}</Text>
+            {feedError ? (
+              <TouchableOpacity style={styles.emptyRetryButton} onPress={() => void fetchFeed()}>
+                <Text style={styles.emptyRetryText}>{t('retry')}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         }
         contentContainerStyle={posts.length === 0 ? styles.emptyList : null}
@@ -1346,16 +1402,44 @@ const styles = StyleSheet.create({
   },
   postImageWrap: {
     width: '100%',
+    maxWidth: '100%',
     borderRadius: 8,
     overflow: 'hidden',
-    marginBottom: 12,
+    marginTop: 4,
+    marginBottom: 16,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  postVideoWrap: {
+    width: '100%',
+    maxWidth: '100%',
+    maxHeight: 400,
+    borderRadius: 8,
+    overflow: 'hidden',
+    marginTop: 4,
+    marginBottom: 16,
+    backgroundColor: '#f8fafc',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
   },
   postImage: {
     width: '100%',
+    maxWidth: '100%',
+    maxHeight: 400,
     backgroundColor: '#f2f2f2',
+    objectFit: 'contain' as any,
   },
   postImageFallback: {
     height: Platform.OS === 'web' ? 320 : 300,
+  },
+  nativePostVideo: {
+    width: '100%',
+    maxWidth: '100%',
+    height: 320,
+    maxHeight: 400,
+    backgroundColor: '#111827',
   },
   postActions: {
     flexDirection: 'row',
@@ -1518,5 +1602,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#999',
     marginTop: 8,
+    textAlign: 'center',
+  },
+  emptyRetryButton: {
+    marginTop: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 999,
+    backgroundColor: '#007AFF',
+  },
+  emptyRetryText: {
+    color: '#fff',
+    fontWeight: '800',
   },
 });

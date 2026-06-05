@@ -8,7 +8,7 @@ const resolveBackendBaseUrl = () => {
     const browserOrigin = window.location.origin;
     const browserBackendOrigin = browserOrigin
       .replace(/:8084$/, ':8000')
-      .replace(/-8084(\.app\.github\.dev)$/, '-8000$1');
+      .replace(/-8084(\.)/, '-8000$1');
 
     if (
       !envUrl ||
