@@ -1,5 +1,6 @@
 from contextlib import asynccontextmanager, suppress
-from fastapi import FastAPI, APIRouter, HTTPException, Header, Request, UploadFile, File, Form
+from fastapi import FastAPI, APIRouter, BackgroundTasks, HTTPException, Header, Request, Response, UploadFile, File, Form, WebSocket, WebSocketDisconnect
+from fastapi.encoders import jsonable_encoder
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -12,13 +13,13 @@ from pydantic import BaseModel, Field, EmailStr, ConfigDict
 from typing import List, Optional, Dict, Any
 import uuid
 import random
+import mimetypes
 from enum import Enum
 from datetime import datetime, timezone, timedelta
 from passlib.context import CryptContext
 import httpx
 from jose import jwt
 import secrets
-from fastapi.staticfiles import StaticFiles
 from fastapi.responses import StreamingResponse, JSONResponse
 import sqlite3
 import asyncio
@@ -139,7 +140,135 @@ app = FastAPI(title="Social Media API", lifespan=lifespan)
 # Ensure uploads directory exists and serve it
 uploads_dir = ROOT_DIR / 'uploads'
 uploads_dir.mkdir(exist_ok=True)
-app.mount("/uploads", StaticFiles(directory=str(uploads_dir)), name="uploads")
+chunk_uploads_dir = uploads_dir / "_chunks"
+chunk_uploads_dir.mkdir(exist_ok=True)
+
+
+def resolve_upload_path(filename: str) -> Path:
+    candidate = (uploads_dir / filename).resolve()
+    uploads_root = uploads_dir.resolve()
+    if uploads_root not in candidate.parents and candidate != uploads_root:
+        raise HTTPException(status_code=404, detail="File not found")
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return candidate
+
+
+def parse_range_header(range_header: Optional[str], file_size: int) -> Optional[tuple[int, int]]:
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    range_value = range_header.replace("bytes=", "", 1).split(",", 1)[0].strip()
+    if "-" not in range_value:
+        return None
+    start_raw, end_raw = range_value.split("-", 1)
+    try:
+        if start_raw == "":
+            suffix_length = int(end_raw)
+            if suffix_length <= 0:
+                return None
+            return max(0, file_size - suffix_length), file_size - 1
+        start = int(start_raw)
+        end = int(end_raw) if end_raw else file_size - 1
+    except ValueError:
+        return None
+    if start >= file_size or end < start:
+        raise HTTPException(
+            status_code=416,
+            detail="Requested Range Not Satisfiable",
+            headers={"Content-Range": f"bytes */{file_size}", "Accept-Ranges": "bytes"},
+        )
+    return start, min(end, file_size - 1)
+
+
+def iter_file_range(path: Path, start: int, end: int):
+    with open(path, "rb") as file:
+        file.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = file.read(min(1024 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+
+
+@app.api_route("/uploads/{filename:path}", methods=["GET", "HEAD"])
+async def serve_upload(filename: str, request: Request):
+    path = resolve_upload_path(filename)
+    file_size = path.stat().st_size
+    media_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+    byte_range = parse_range_header(request.headers.get("range"), file_size)
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Type": media_type,
+    }
+    if byte_range:
+        start, end = byte_range
+        headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
+        headers["Content-Length"] = str(end - start + 1)
+        if request.method == "HEAD":
+            return Response(status_code=206, headers=headers)
+        return StreamingResponse(iter_file_range(path, start, end), status_code=206, media_type=media_type, headers=headers)
+    headers["Content-Length"] = str(file_size)
+    if request.method == "HEAD":
+        return Response(status_code=200, headers=headers)
+    return StreamingResponse(iter_file_range(path, 0, file_size - 1), status_code=200, media_type=media_type, headers=headers)
+
+ALLOWED_CORS_METHODS = "GET, POST, PUT, DELETE, OPTIONS"
+ALLOWED_CORS_HEADERS = "Authorization, Content-Type, X-Tunnel-Skip-Bypassing-Warning"
+MAX_POST_UPLOAD_BYTES = int(os.environ.get("MAX_POST_UPLOAD_BYTES", str(500 * 1024 * 1024)))
+
+
+def is_allowed_cors_origin(origin: Optional[str]) -> bool:
+    if not origin:
+        return False
+    if origin.startswith("http://localhost:") or origin.startswith("http://127.0.0.1:"):
+        return True
+    return origin.startswith("https://") and origin.endswith(".app.github.dev")
+
+
+def apply_cors_headers(response: Response, origin: Optional[str]) -> Response:
+    if is_allowed_cors_origin(origin):
+        response.headers["Access-Control-Allow-Origin"] = str(origin)
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Allow-Methods"] = ALLOWED_CORS_METHODS
+        response.headers["Access-Control-Allow-Headers"] = ALLOWED_CORS_HEADERS
+        response.headers["Access-Control-Expose-Headers"] = "Content-Length, Content-Type"
+        response.headers["Vary"] = "Origin"
+    return response
+
+
+@app.middleware("http")
+async def explicit_api_cors_middleware(request: Request, call_next):
+    origin = request.headers.get("origin")
+    if request.method == "OPTIONS" and request.url.path.startswith("/api/"):
+        return apply_cors_headers(Response(status_code=200), origin)
+    if request.method == "POST" and request.url.path == "/api/posts":
+        content_length = request.headers.get("content-length")
+        if content_length:
+            try:
+                request_size = int(content_length)
+            except ValueError:
+                request_size = 0
+            if request_size > MAX_POST_UPLOAD_BYTES:
+                logger.warning(
+                    "POST /api/posts rejected: content_length=%s max_bytes=%s",
+                    request_size,
+                    MAX_POST_UPLOAD_BYTES,
+                )
+                return apply_cors_headers(
+                    JSONResponse(
+                        status_code=413,
+                        content={
+                            "detail": f"Upload failed: file size exceeds {MAX_POST_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+                        },
+                    ),
+                    origin,
+                )
+    response = await call_next(request)
+    if request.url.path.startswith("/api/"):
+        apply_cors_headers(response, origin)
+    return response
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"}
 ALLOWED_VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
@@ -187,26 +316,23 @@ def optimize_image_upload(contents: bytes, upload: UploadFile, post_id: str) -> 
         raise HTTPException(status_code=500, detail="Failed to optimize uploaded image")
 
 
-def transcode_video_upload(contents: bytes, upload: UploadFile, post_id: str) -> str:
+def transcode_video_upload(contents: bytes, upload: UploadFile, post_id: str, allow_original_fallback: bool = False) -> str:
     ext = _validate_upload_extension(upload, ALLOWED_VIDEO_EXTENSIONS, "video")
     ffmpeg_path = shutil.which("ffmpeg")
 
     if ffmpeg_path is None:
-        if ext == ".mp4":
-            filename = f"{post_id}.mp4"
-            out_path = uploads_dir / filename
-            with open(out_path, "wb") as file:
-                file.write(contents)
-            return f"/uploads/{filename}"
+        if allow_original_fallback or ext == ".mp4":
+            return save_original_or_remux_webm(contents, ext, post_id, "ffmpeg_unavailable")
         raise HTTPException(
             status_code=500,
-            detail="Video transcoding requires ffmpeg on the backend.",
+            detail="FFmpeg unavailable: Video transcoding requires ffmpeg on the backend.",
         )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         input_path = Path(tmpdir) / f"input{ext}"
         output_path = Path(tmpdir) / "output.mp4"
         input_path.write_bytes(contents)
+        logger.info("[recording] file saved: post_id=%s path=%s bytes=%s temporary=true", post_id, input_path, len(contents))
         command = [
             ffmpeg_path,
             "-y",
@@ -232,15 +358,172 @@ def transcode_video_upload(contents: bytes, upload: UploadFile, post_id: str) ->
             "+faststart",
             str(output_path),
         ]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        logger.info("[recording] ffmpeg started: post_id=%s input=%s output=%s", post_id, input_path, output_path)
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=180)
+        except subprocess.TimeoutExpired:
+            logger.error("[recording] ffmpeg failed: post_id=%s reason=timeout filename=%s", post_id, upload.filename)
+            if allow_original_fallback:
+                return save_original_or_remux_webm(contents, ext, post_id, "ffmpeg_timeout")
+            raise HTTPException(status_code=500, detail="FFmpeg transcoding failed: timed out")
         if result.returncode != 0 or not output_path.exists():
-            logger.error("ffmpeg failed for %s: %s", upload.filename, result.stderr[-1000:])
-            raise HTTPException(status_code=500, detail="Failed to transcode uploaded video")
+            stderr_tail = result.stderr[-1000:]
+            logger.error("[recording] ffmpeg failed: post_id=%s returncode=%s stderr=%s", post_id, result.returncode, stderr_tail)
+            if allow_original_fallback:
+                return save_original_or_remux_webm(contents, ext, post_id, "ffmpeg_failed")
+            raise HTTPException(status_code=500, detail=f"FFmpeg transcoding failed: {stderr_tail}")
 
         filename = f"{post_id}.mp4"
         out_path = uploads_dir / filename
         shutil.move(str(output_path), out_path)
+        logger.info("[recording] ffmpeg completed: post_id=%s output=%s", post_id, out_path)
+        logger.info("[recording] file saved: post_id=%s path=%s transcoded=true", post_id, out_path)
+        log_media_probe("transcoded output probe", post_id, out_path)
         return f"/uploads/{filename}"
+
+
+def probe_media_duration(path: Path) -> Dict[str, Optional[float]]:
+    ffprobe_path = shutil.which("ffprobe")
+    if ffprobe_path is None or not path.exists():
+        return {"format_duration": None, "video_packet_duration": None, "audio_packet_duration": None}
+
+    def run_probe(args: List[str]) -> Optional[float]:
+        try:
+            result = subprocess.run([ffprobe_path, *args, str(path)], capture_output=True, text=True, timeout=30)
+            if result.returncode != 0:
+                return None
+            values = [line.strip() for line in result.stdout.splitlines() if line.strip() and line.strip() != "N/A"]
+            if not values:
+                return None
+            return float(values[-1])
+        except Exception:
+            return None
+
+    return {
+        "format_duration": run_probe(["-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1"]),
+        "video_packet_duration": run_probe(["-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0"]),
+        "audio_packet_duration": run_probe(["-v", "error", "-select_streams", "a:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0"]),
+    }
+
+
+def log_media_probe(label: str, post_id: str, path: Path) -> None:
+    probe = probe_media_duration(path)
+    size = path.stat().st_size if path.exists() else 0
+    logger.info(
+        "[recording] %s: post_id=%s path=%s final_file_size=%s ffprobe_duration=%s video_packet_duration=%s audio_packet_duration=%s",
+        label,
+        post_id,
+        path,
+        size,
+        probe.get("format_duration"),
+        probe.get("video_packet_duration"),
+        probe.get("audio_packet_duration"),
+    )
+
+
+def save_original_or_remux_webm(contents: bytes, ext: str, post_id: str, reason: str) -> str:
+    filename = f"{post_id}{ext if ext in ALLOWED_VIDEO_EXTENSIONS else '.webm'}"
+    out_path = uploads_dir / filename
+    if ext == ".webm" and shutil.which("ffmpeg") is not None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            input_path = Path(tmpdir) / "input.webm"
+            fixed_path = Path(tmpdir) / "fixed.webm"
+            input_path.write_bytes(contents)
+            log_media_probe(f"fallback source probe reason={reason}", post_id, input_path)
+            command = [
+                shutil.which("ffmpeg") or "ffmpeg",
+                "-y",
+                "-i",
+                str(input_path),
+                "-c",
+                "copy",
+                str(fixed_path),
+            ]
+            result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+            if result.returncode == 0 and fixed_path.exists() and fixed_path.stat().st_size > 0:
+                shutil.move(str(fixed_path), out_path)
+                logger.info("[recording] webm remux completed: post_id=%s path=%s reason=%s", post_id, out_path, reason)
+                log_media_probe(f"fallback remuxed probe reason={reason}", post_id, out_path)
+                return f"/uploads/{filename}"
+            logger.error("[recording] webm remux failed: post_id=%s reason=%s stderr=%s", post_id, reason, result.stderr[-1000:])
+    with open(out_path, "wb") as file:
+        file.write(contents)
+    logger.info("[recording] file saved: post_id=%s path=%s transcoded=false remuxed=false reason=%s", post_id, out_path, reason)
+    log_media_probe(f"fallback original probe reason={reason}", post_id, out_path)
+    return f"/uploads/{filename}"
+
+
+class StoredUpload:
+    def __init__(self, filename: str, content_type: Optional[str] = None):
+        self.filename = filename
+        self.content_type = content_type
+
+
+async def process_live_recording_post(
+    post_id: str,
+    source_path: str,
+    original_filename: str,
+    content_type: Optional[str],
+) -> None:
+    logger.info("[recording] background processing started: post_id=%s source=%s", post_id, source_path)
+    video_url: Optional[str] = None
+    status = "ready"
+    try:
+        source = Path(source_path)
+        log_media_probe("background source probe", post_id, source)
+        contents = source.read_bytes()
+        ext = Path(original_filename).suffix.lower() or _upload_extension(StoredUpload(original_filename, content_type))
+        if ext == ".webm":
+            logger.info(
+                "[recording] live recording uses fast webm remux path: post_id=%s filename=%s content_type=%s",
+                post_id,
+                original_filename,
+                content_type,
+            )
+            video_url = save_original_or_remux_webm(contents, ext, post_id, "live_recording_fast_remux")
+        else:
+            upload = StoredUpload(original_filename, content_type)
+            video_url = transcode_video_upload(contents, upload, post_id, allow_original_fallback=True)
+        logger.info("[recording] background processing completed: post_id=%s videoUrl=%s", post_id, video_url)
+    except Exception as exc:
+        status = "failed"
+        logger.error("[recording] background processing failed: post_id=%s error=%s", post_id, exc)
+        try:
+            ext = Path(original_filename).suffix.lower() or ".webm"
+            fallback_ext = ext if ext in ALLOWED_VIDEO_EXTENSIONS else ".webm"
+            source = Path(source_path)
+            video_url = save_original_or_remux_webm(source.read_bytes(), fallback_ext, post_id, "background_exception")
+            status = "ready"
+            logger.info("[recording] fallback original ready: post_id=%s videoUrl=%s", post_id, video_url)
+        except Exception as fallback_exc:
+            logger.error("[recording] fallback failed: post_id=%s error=%s", post_id, fallback_exc)
+            status = "failed"
+    finally:
+        post: Optional[Dict[str, Any]] = None
+        if db is not None:
+            update_doc: Dict[str, Any] = {"status": status}
+            if video_url:
+                update_doc["video"] = video_url
+                update_doc["videoUrl"] = video_url
+            await db.posts.update_one({"post_id": post_id}, {"$set": update_doc})
+            post = await db.posts.find_one({"post_id": post_id}, {"_id": 0})
+        elif REPOSITORY_ADAPTER is not None:
+            logger.warning("[recording] repository adapter processing status update is not implemented: post_id=%s", post_id)
+        else:
+            post = update_sqlite_post_processing_result(post_id, video_url, status)
+        if post:
+            await broadcast_video_ready(post)
+        with suppress(Exception):
+            Path(source_path).unlink(missing_ok=True)
+
+
+async def enqueue_live_recording_processing(
+    post_id: str,
+    source_path: str,
+    original_filename: str,
+    content_type: Optional[str],
+) -> None:
+    asyncio.create_task(process_live_recording_post(post_id, source_path, original_filename, content_type))
 
 RATE_LIMIT_BUCKETS: Dict[str, Dict[str, Any]] = {}
 RATE_LIMITS = {
@@ -337,6 +620,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(level
 logger = logging.getLogger(__name__)
 SYSTEM_LOGS: List[Dict[str, Any]] = []
 MESSAGE_CONVERSATIONS: Dict[str, List[Dict[str, Any]]] = {}
+LIVE_SIGNALING_ROOMS: Dict[str, set[WebSocket]] = {}
+LIVE_ROOM_METADATA: Dict[str, Dict[str, Any]] = {}
+LIVE_SIGNALING_CLIENTS: set[WebSocket] = set()
+VIDEO_PROCESSING_STATUSES = {"processing", "ready", "failed"}
 MESSAGE_TYPING_TTL_SECONDS = 18
 USER_ONLINE_TTL_SECONDS = 120
 DEMO_ACCOUNTS = [
@@ -364,6 +651,211 @@ def push_audit_log(action: str, subject_id: str, actor_id: Optional[str] = None,
     SYSTEM_LOGS[-1]["subject_id"] = subject_id
     SYSTEM_LOGS[-1]["actor_id"] = actor_id
 
+
+def remove_live_socket(websocket: WebSocket, room_id: Optional[str]) -> None:
+    if not room_id:
+        return
+    room = LIVE_SIGNALING_ROOMS.get(room_id)
+    if not room:
+        return
+    room.discard(websocket)
+    if not room:
+        LIVE_SIGNALING_ROOMS.pop(room_id, None)
+        LIVE_ROOM_METADATA.pop(room_id, None)
+
+
+def update_live_room_metadata(room_id: str, payload: Dict[str, Any]) -> None:
+    metadata = LIVE_ROOM_METADATA.get(room_id, {})
+    is_streamer = bool(payload.get("isStreamer") or metadata.get("is_streamer"))
+    can_update_streamer_metadata = bool(payload.get("isStreamer")) or not metadata
+    topic = str((payload.get("topic") if can_update_streamer_metadata else None) or metadata.get("topic") or "#YOSLA").strip()
+    username = str((payload.get("username") if can_update_streamer_metadata else None) or metadata.get("username") or "Live").strip()
+    profile_picture = (payload.get("profilePicture") if can_update_streamer_metadata else None) or metadata.get("profile_picture")
+    now = utc_iso_now()
+    LIVE_ROOM_METADATA[room_id] = {
+        **metadata,
+        "roomId": room_id,
+        "topic": topic,
+        "username": username,
+        "profile_picture": profile_picture if isinstance(profile_picture, str) else None,
+        "is_streamer": is_streamer,
+        "started_at": metadata.get("started_at") or now,
+        "updated_at": now,
+    }
+
+
+def get_active_live_streams() -> List[Dict[str, Any]]:
+    active_streams: List[Dict[str, Any]] = []
+    for room_id, room in LIVE_SIGNALING_ROOMS.items():
+        metadata = LIVE_ROOM_METADATA.get(room_id, {})
+        if len(room) <= 0 or not metadata.get("is_streamer"):
+            continue
+        active_streams.append({
+            "roomId": room_id,
+            "topic": metadata.get("topic") or "#YOSLA",
+            "username": metadata.get("username") or "Live",
+            "profilePicture": metadata.get("profile_picture"),
+            "count": len(room),
+            "startedAt": metadata.get("started_at"),
+            "breakingScore": compute_breaking_live_score(room_id, len(room), metadata),
+        })
+    return active_streams
+
+
+def compute_breaking_live_score(room_id: str, viewer_count: int, metadata: Dict[str, Any]) -> float:
+    started_raw = metadata.get("started_at")
+    age_minutes = 30.0
+    if started_raw:
+      try:
+          started = datetime.fromisoformat(str(started_raw).replace("Z", "+00:00"))
+          age_minutes = max(1.0, (utc_now() - started).total_seconds() / 60)
+      except Exception:
+          age_minutes = 30.0
+    topic_bonus = 8 if str(metadata.get("topic") or "").startswith("#") else 0
+    freshness = max(0.0, 30.0 - min(age_minutes, 30.0))
+    return round(viewer_count * 12 + freshness + topic_bonus, 2)
+
+
+async def send_live_active_streams(websocket: WebSocket) -> None:
+    await websocket.send_json({
+        "event": "live:active-streams",
+        "payload": {"streams": get_active_live_streams()},
+    })
+
+
+async def broadcast_live_active_streams() -> None:
+    stale_connections: List[WebSocket] = []
+    message = {"event": "live:active-streams", "payload": {"streams": get_active_live_streams()}}
+    for peer in list(LIVE_SIGNALING_CLIENTS):
+        try:
+            await peer.send_json(message)
+        except Exception:
+            stale_connections.append(peer)
+    for peer in stale_connections:
+        LIVE_SIGNALING_CLIENTS.discard(peer)
+
+
+async def broadcast_video_ready(post: Dict[str, Any]) -> None:
+    stale_connections: List[WebSocket] = []
+    normalized = normalize_post_payload(post)
+    message = {
+        "event": "VIDEO_READY",
+        "payload": {
+            "postId": normalized.get("post_id"),
+            "status": normalized.get("status") or "ready",
+            "videoUrl": normalized.get("videoUrl") or normalized.get("video"),
+            "thumbnailUrl": normalized.get("thumbnailUrl") or normalized.get("image"),
+            "post": normalized,
+        },
+    }
+    for peer in list(LIVE_SIGNALING_CLIENTS):
+        try:
+            await peer.send_json(message)
+        except Exception:
+            stale_connections.append(peer)
+    for peer in stale_connections:
+        LIVE_SIGNALING_CLIENTS.discard(peer)
+
+
+async def broadcast_live_viewer_count(room_id: str) -> None:
+    room = LIVE_SIGNALING_ROOMS.get(room_id, set())
+    active_connections = len(room)
+    metadata = LIVE_ROOM_METADATA.get(room_id, {})
+    LIVE_ROOM_METADATA[room_id] = {**metadata, "roomId": room_id, "viewer_count": active_connections}
+    if active_connections == 0:
+        await broadcast_live_active_streams()
+        return
+
+    stale_connections: List[WebSocket] = []
+    message = {
+        "event": "live:viewer-count-update",
+        "payload": {
+            "type": "viewer_count_update",
+            "roomId": room_id,
+            "count": active_connections,
+        },
+    }
+    for peer in list(room):
+        try:
+            await peer.send_json(message)
+        except Exception:
+            stale_connections.append(peer)
+    for peer in stale_connections:
+        remove_live_socket(peer, room_id)
+    await broadcast_live_active_streams()
+
+
+async def broadcast_live_signal(room_id: str, sender: WebSocket, event: str, payload: Dict[str, Any]) -> None:
+    stale_connections: List[WebSocket] = []
+    message = {"event": event, "payload": payload}
+    for peer in list(LIVE_SIGNALING_ROOMS.get(room_id, set())):
+        if peer is sender:
+            continue
+        try:
+            await peer.send_json(message)
+        except Exception:
+            stale_connections.append(peer)
+    for peer in stale_connections:
+        remove_live_socket(peer, room_id)
+
+
+@app.websocket("/ws/live")
+async def live_signaling_websocket(websocket: WebSocket):
+    await websocket.accept()
+    LIVE_SIGNALING_CLIENTS.add(websocket)
+    room_id: Optional[str] = None
+    try:
+        while True:
+            message = await websocket.receive_json()
+            event = str(message.get("event") or "")
+            payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
+            next_room_id = str(payload.get("roomId") or room_id or "").strip()
+
+            if event == "live:list-active":
+                await send_live_active_streams(websocket)
+                continue
+
+            if event == "live:join" and next_room_id:
+                previous_room_id = room_id
+                remove_live_socket(websocket, room_id)
+                if previous_room_id and previous_room_id != next_room_id:
+                    await broadcast_live_viewer_count(previous_room_id)
+                room_id = next_room_id
+                update_live_room_metadata(room_id, payload)
+                LIVE_SIGNALING_ROOMS.setdefault(room_id, set()).add(websocket)
+                await broadcast_live_viewer_count(room_id)
+                continue
+
+            if event == "live:leave":
+                previous_room_id = room_id
+                remove_live_socket(websocket, room_id)
+                room_id = None
+                if previous_room_id:
+                    await broadcast_live_viewer_count(previous_room_id)
+                continue
+
+            if event in {"live:send-offer", "live:send-answer", "live:ice-candidate", "live:send-gift"} and next_room_id:
+                room_id = next_room_id
+                room = LIVE_SIGNALING_ROOMS.setdefault(room_id, set())
+                was_known_connection = websocket in room
+                room.add(websocket)
+                if not was_known_connection:
+                    await broadcast_live_viewer_count(room_id)
+                outbound_event = {
+                    "live:send-offer": "live:receive-offer",
+                    "live:send-answer": "live:receive-answer",
+                    "live:ice-candidate": "live:ice-candidate",
+                    "live:send-gift": "live:receive-gift",
+                }[event]
+                await broadcast_live_signal(room_id, websocket, outbound_event, payload)
+    except WebSocketDisconnect:
+        previous_room_id = room_id
+        remove_live_socket(websocket, room_id)
+        if previous_room_id:
+            await broadcast_live_viewer_count(previous_room_id)
+    finally:
+        LIVE_SIGNALING_CLIENTS.discard(websocket)
+
 # =======================
 # MODELS
 # =======================
@@ -389,17 +881,21 @@ class UserProfile(BaseModel):
     username: str
     profile_picture: Optional[str] = None
     bio: Optional[str] = None
+    relationship_status: str = "private"
     followers_count: int = 0
     following_count: int = 0
     posts_count: int = 0
     created_at: datetime
     role: str = "user"
     banned_until: Optional[datetime] = None
+    trust_score: int = 100
+    trust_recovery_last_at: Optional[str] = None
 
 class UserUpdate(BaseModel):
     username: Optional[str] = None
     profile_picture: Optional[str] = None
     bio: Optional[str] = None
+    relationship_status: Optional[str] = None
     role: Optional[str] = None
 
 class PostCreate(BaseModel):
@@ -408,6 +904,17 @@ class PostCreate(BaseModel):
     video: Optional[str] = None
     repost_post_id: Optional[str] = None
     is_nsfw: bool = False
+
+class PollOption(BaseModel):
+    option_id: str
+    text: str
+    votes_count: int = 0
+
+class Poll(BaseModel):
+    question: str
+    options: List[PollOption] = Field(default_factory=list)
+    total_votes: int = 0
+    user_vote: Optional[str] = None
 
 class Post(BaseModel):
     post_id: str
@@ -418,20 +925,63 @@ class Post(BaseModel):
     text: str
     image: Optional[str] = None
     video: Optional[str] = None
+    videoUrl: Optional[str] = None
+    thumbnailUrl: Optional[str] = None
+    title: Optional[str] = None
+    authorId: Optional[str] = None
+    duration: Optional[int] = None
+    visibility: str = "public"
+    type: Optional[str] = None
+    is_clip: bool = False
+    source: Optional[str] = None
+    status: str = "ready"
+    poll: Optional[Poll] = None
+    reaction_counts: Dict[str, int] = Field(default_factory=dict)
+    user_reaction: Optional[str] = None
     hashtags: List[str] = Field(default_factory=list)
     mentions: List[str] = Field(default_factory=list)
     repost_post_id: Optional[str] = None
     repost_count: int = 0
     likes_count: int = 0
     comments_count: int = 0
+    views: int = 0
+    watch_time: float = 0
+    completion_rate: float = 0
+    replay_count: int = 0
     is_liked: bool = False
+    is_bookmarked: bool = False
     moderation_status: Optional[str] = None
     is_nsfw: bool = False
+    copyright_status: str = "clear"
+    music_risk: str = "none"
+    music_warning_acknowledged: bool = False
+    distribution_limited: bool = False
     comments: List["Comment"] = []
     created_at: datetime
 
 class CommentCreate(BaseModel):
     text: str
+
+class PollVoteCreate(BaseModel):
+    option_id: str
+
+class ReactionCreate(BaseModel):
+    reaction_type: str
+
+class VideoAnalyticsEvent(BaseModel):
+    event: str
+    current_time: float = 0
+    duration: Optional[float] = None
+    milestone: Optional[int] = None
+
+class PostUpdate(BaseModel):
+    title: Optional[str] = None
+    text: Optional[str] = None
+    image: Optional[str] = None
+    thumbnailUrl: Optional[str] = None
+
+class BookmarkToggleCreate(BaseModel):
+    post_id: str
 
 class Comment(BaseModel):
     comment_id: str
@@ -464,6 +1014,11 @@ class ModerationDecision(BaseModel):
     reason_tags: List[str] = Field(default_factory=list)
     reason_custom: Optional[str] = None
     reviewed_reason: Optional[str] = None
+
+
+class TrustScoreUpdate(BaseModel):
+    delta: int
+    reason: str = "admin_adjustment"
 
 
 class ProviderModerationResult(BaseModel):
@@ -834,6 +1389,17 @@ def utc_now() -> datetime:
 def utc_iso_now() -> str:
     return utc_now().isoformat()
 
+def parse_datetime_or_none(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
 def normalize_role(role: Optional[str]) -> str:
     if not role:
         return "user"
@@ -976,6 +1542,229 @@ def derive_creator_suggestions_from_posts(posts: List[Dict[str, Any]], limit: in
             "post_count": int(existing.get("post_count", 0) if existing else 0) + 1,
         }
     return sorted(creators.values(), key=lambda item: (-item["post_count"], item["username"]))[:limit]
+
+def is_new_user_profile(user: Dict[str, Any]) -> bool:
+    return (
+        int(user.get("posts_count") or 0) < 3
+        and int(user.get("followers_count") or 0) == 0
+        and int(user.get("following_count") or 0) <= 2
+    )
+
+def post_engagement_score(post: Dict[str, Any]) -> float:
+    return (
+        float(post.get("comments_count") or 0) * 5
+        + float(post.get("repost_count") or 0) * 4
+        + float(post.get("likes_count") or 0) * 2
+        + float(post.get("views") or 0) * 0.01
+        + float(post.get("replay_count") or 0) * 3
+    )
+
+def creator_level_from_score(score: float) -> Dict[str, Any]:
+    levels = [
+        {"level": 1, "name": "Starter", "min": 0, "next": 250},
+        {"level": 2, "name": "Rising Creator", "min": 250, "next": 900},
+        {"level": 3, "name": "Live Builder", "min": 900, "next": 2500},
+        {"level": 4, "name": "Community Voice", "min": 2500, "next": 6500},
+        {"level": 5, "name": "YOSLA Star", "min": 6500, "next": None},
+    ]
+    selected = levels[0]
+    for level in levels:
+        if score >= level["min"]:
+            selected = level
+    next_score = selected["next"]
+    progress = 100 if next_score is None else max(0, min(100, round(((score - selected["min"]) / max(1, next_score - selected["min"])) * 100)))
+    return {
+        "level": selected["level"],
+        "name": selected["name"],
+        "score": round(score, 2),
+        "next_score": next_score,
+        "progress": progress,
+    }
+
+def compute_creator_stats_from_posts(user: Dict[str, Any], posts: List[Dict[str, Any]], comments_made: int = 0) -> Dict[str, Any]:
+    own_posts = [post for post in posts if str(post.get("user_id") or "") == str(user.get("user_id") or "")]
+    live_recordings = [
+        post for post in own_posts
+        if str(post.get("type") or "") in {"live_recording", "live_replay", "clip"}
+        or str(post.get("source") or "") in {"live_recording", "live_replay"}
+        or bool(post.get("is_clip"))
+    ]
+    total_likes = sum(int(post.get("likes_count") or 0) for post in own_posts)
+    total_comments = sum(int(post.get("comments_count") or 0) for post in own_posts)
+    total_views = sum(int(post.get("views") or 0) for post in own_posts)
+    total_replays = sum(int(post.get("replay_count") or 0) for post in own_posts)
+    total_watch_time = sum(float(post.get("watch_time") or 0) for post in own_posts)
+    score = (
+        len(own_posts) * 30
+        + len(live_recordings) * 120
+        + total_likes * 5
+        + total_comments * 8
+        + total_views * 0.2
+        + total_replays * 12
+        + comments_made * 3
+        + total_watch_time / 60
+    )
+    creator_level = creator_level_from_score(score)
+    return {
+        "user_id": user.get("user_id"),
+        "username": user.get("username"),
+        "posts_count": len(own_posts),
+        "live_recordings_count": len(live_recordings),
+        "likes_received": total_likes,
+        "comments_received": total_comments,
+        "views": total_views,
+        "replay_count": total_replays,
+        "watch_time": round(total_watch_time, 2),
+        "comments_made": comments_made,
+        **creator_level,
+    }
+
+def compute_achievements_from_creator_stats(stats: Dict[str, Any]) -> List[Dict[str, Any]]:
+    definitions = [
+        ("first_post", "Ensimmäinen julkaisu", "Julkaise ensimmäinen postaus.", stats.get("posts_count", 0), 1, "create-outline"),
+        ("first_live_replay", "Live Replay avattu", "Tallenna ja julkaise ensimmäinen live.", stats.get("live_recordings_count", 0), 1, "radio-outline"),
+        ("conversation_spark", "Keskustelun sytyttäjä", "Kerää 10 kommenttia omiin julkaisuihin.", stats.get("comments_received", 0), 10, "chatbubbles-outline"),
+        ("community_signal", "Yhteisön ääni", "Kerää 100 katselua tai näyttökertaa.", stats.get("views", 0), 100, "people-outline"),
+        ("replay_builder", "Replay-rakentaja", "Kerää 5 replay-katselua.", stats.get("replay_count", 0), 5, "play-circle-outline"),
+        ("active_member", "Aktiivinen jäsen", "Kommentoi 5 kertaa.", stats.get("comments_made", 0), 5, "sparkles-outline"),
+    ]
+    achievements = []
+    for key, title, description, current, target, icon in definitions:
+        current_value = float(current or 0)
+        target_value = float(target)
+        achievements.append({
+            "achievement_id": key,
+            "title": title,
+            "description": description,
+            "icon": icon,
+            "current": int(current_value),
+            "target": int(target_value),
+            "progress": max(0, min(100, round((current_value / target_value) * 100))),
+            "unlocked": current_value >= target_value,
+        })
+    return achievements
+
+def compute_daily_trends_from_posts(posts: List[Dict[str, Any]], limit: int = 8) -> Dict[str, Any]:
+    visible_posts = [
+        post for post in posts
+        if not post.get("is_nsfw")
+        and str(post.get("moderation_status") or "") != "blocked"
+        and not post.get("distribution_limited")
+        and str(post.get("copyright_status") or "clear") in {"clear", "music_warning"}
+    ]
+    scored_posts = sorted(
+        [
+            {
+                "post_id": post.get("post_id"),
+                "title": post.get("title") or str(post.get("text") or "")[:90] or "YOSLA julkaisu",
+                "text": post.get("text") or "",
+                "username": post.get("username"),
+                "type": post.get("type") or ("live_replay" if post.get("source") == "live_replay" else "post"),
+                "score": round(post_engagement_score(post), 2),
+                "views": int(post.get("views") or 0),
+                "likes_count": int(post.get("likes_count") or 0),
+                "comments_count": int(post.get("comments_count") or 0),
+                "replay_count": int(post.get("replay_count") or 0),
+                "created_at": post.get("created_at"),
+            }
+            for post in visible_posts
+        ],
+        key=lambda item: (-item["score"], str(item.get("created_at") or "")),
+    )[:limit]
+    hashtag_scores: Dict[str, Dict[str, Any]] = {}
+    for post in visible_posts:
+        hashtags = post.get("hashtags")
+        if not isinstance(hashtags, list) or not hashtags:
+            hashtags = extract_hashtags_from_text(str(post.get("text") or ""))
+        for tag in hashtags:
+            label = normalize_topic_token(str(tag))
+            if not label.startswith("#"):
+                label = f"#{label.lstrip('#')}"
+            if len(label) < 2:
+                continue
+            entry = hashtag_scores.setdefault(label, {"label": label, "score": 0.0, "posts": 0})
+            entry["score"] += post_engagement_score(post) + 1
+            entry["posts"] += 1
+    hashtags = sorted(hashtag_scores.values(), key=lambda item: (-item["score"], item["label"]))[:limit]
+    for item in hashtags:
+        item["score"] = round(float(item["score"]), 2)
+    return {
+        "generated_at": utc_now().isoformat(),
+        "posts": scored_posts,
+        "hashtags": hashtags,
+    }
+
+async def load_growth_posts(limit: int = 500) -> List[Dict[str, Any]]:
+    safe_limit = max(1, min(limit, 1000))
+    if db is not None:
+        posts = await db.posts.find({}, {"_id": 0}).sort("created_at", -1).limit(safe_limit).to_list(length=safe_limit)
+        return [normalize_post_payload(post) for post in posts]
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM posts ORDER BY created_at DESC LIMIT ?", (safe_limit,))
+        return [normalize_post_payload(dict(row)) for row in cursor.fetchall()]
+
+async def count_user_comments_made(user_id: str) -> int:
+    if db is not None:
+        return int(await db.comments.count_documents({"user_id": user_id}))
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) AS c FROM comments WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        return int(row["c"] if row else 0)
+
+async def load_growth_users(limit: int = 100) -> List[Dict[str, Any]]:
+    safe_limit = max(1, min(limit, 500))
+    if db is not None:
+        return await db.users.find({}, {"_id": 0}).limit(safe_limit).to_list(length=safe_limit)
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM users LIMIT ?", (safe_limit,))
+        return [dict(row) for row in cursor.fetchall()]
+
+def build_local_yosla_payload(user: Dict[str, Any], posts: List[Dict[str, Any]], limit: int = 8) -> Dict[str, Any]:
+    profile_text = " ".join(str(user.get(key) or "") for key in ["location", "city", "country", "bio"]).lower()
+    local_tags = ["#suomi", "#fi", "#helsinki", "#tampere", "#turku", "#oulu", "#local"]
+    if "helsinki" in profile_text:
+        local_tags.insert(0, "#helsinki")
+    if "tampere" in profile_text:
+        local_tags.insert(0, "#tampere")
+    if "turku" in profile_text:
+        local_tags.insert(0, "#turku")
+    if "oulu" in profile_text:
+        local_tags.insert(0, "#oulu")
+    seen_tags: set[str] = set()
+    ordered_tags = [tag for tag in local_tags if not (tag in seen_tags or seen_tags.add(tag))]
+    local_posts = []
+    for post in posts:
+        text = str(post.get("text") or "").lower()
+        hashtags = [str(tag).lower() for tag in (post.get("hashtags") or extract_hashtags_from_text(text))]
+        if any(tag in hashtags or tag in text for tag in ordered_tags):
+            local_posts.append({
+                "post_id": post.get("post_id"),
+                "title": post.get("title") or str(post.get("text") or "")[:90],
+                "username": post.get("username"),
+                "topic": next((tag for tag in ordered_tags if tag in hashtags or tag in text), "#local"),
+                "score": post_engagement_score(post),
+                "created_at": post.get("created_at"),
+            })
+    local_posts.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("created_at") or "")))
+    communities = [
+        {
+            "name": tag.lstrip("#").capitalize(),
+            "tag": tag,
+            "description": f"Paikallinen YOSLA-keskustelu aiheesta {tag}.",
+            "members": max(12, sum(1 for post in posts if tag in str(post.get("text") or "").lower()) * 9),
+        }
+        for tag in ordered_tags[:limit]
+    ]
+    return {
+        "region": "Suomi",
+        "generated_at": utc_now().isoformat(),
+        "topics": ordered_tags[:limit],
+        "communities": communities,
+        "posts": local_posts[:limit],
+    }
 
 def build_community_suggestions_from_topics(topics: List[Dict[str, Any]], limit: int = 5) -> List[Dict[str, Any]]:
     communities = [
@@ -2055,6 +2844,200 @@ def penalty_for_offense(offense_count: int) -> tuple[str, Optional[datetime]]:
         return "suspend", utc_now() + timedelta(days=30)
     return "nuke", None
 
+def detect_music_risk(text: str, has_video: bool = False, source: Optional[str] = None) -> Dict[str, Any]:
+    lowered = str(text or "").lower()
+    music_terms = {
+        "music", "song", "track", "dj", "cover", "remix", "lyrics", "beat", "biisi",
+        "musiikki", "kappale", "laulu", "taustamusiikki", "keikka", "konsertti",
+    }
+    matched = sorted(term for term in music_terms if term in lowered)
+    risk = "none"
+    if matched:
+        risk = "high" if has_video else "medium"
+    elif has_video and source in {"live_recording", "live_replay"}:
+        risk = "medium"
+    elif has_video:
+        risk = "low"
+    return {
+        "music_risk": risk,
+        "music_warning_acknowledged": risk == "none",
+        "copyright_status": "music_warning" if risk in {"medium", "high"} else "clear",
+        "distribution_limited": risk == "high",
+        "signals": matched,
+    }
+
+async def adjust_user_trust_score(user_id: str, delta: int, reason: str) -> int:
+    delta = int(delta)
+    if db is not None:
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "trust_score": 1})
+        current = int((user or {}).get("trust_score", 100) or 100)
+        next_score = max(0, min(100, current + delta))
+        await db.users.update_one({"user_id": user_id}, {"$set": {"trust_score": next_score}})
+        push_audit_log("trust_score_adjusted", user_id, details=json.dumps({"delta": delta, "reason": reason, "score": next_score}))
+        return next_score
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COALESCE(trust_score, 100) AS trust_score FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        current = int(row["trust_score"] if row else 100)
+        next_score = max(0, min(100, current + delta))
+        cursor.execute("UPDATE users SET trust_score = ? WHERE user_id = ?", (next_score, user_id))
+        conn.commit()
+    push_audit_log("trust_score_adjusted", user_id, details=json.dumps({"delta": delta, "reason": reason, "score": next_score}))
+    return next_score
+
+
+async def apply_trust_score_recovery(user_id: str) -> Dict[str, Any]:
+    now = utc_now()
+    recovery_cap = 90
+    last_negative_at: Optional[datetime] = None
+
+    if db is not None:
+        user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "trust_score": 1, "trust_recovery_last_at": 1})
+        trust_score = int((user or {}).get("trust_score", 100) or 100)
+        last_recovery_at = parse_datetime_or_none((user or {}).get("trust_recovery_last_at"))
+        latest_negative = await db.moderation_queue.find_one(
+            {
+                "user_id": user_id,
+                "status": {"$in": ["rejected", "resolved"]},
+                "$or": [
+                    {"reviewed_reason": {"$regex": "warning|limit|restrict|remove|copyright|music", "$options": "i"}},
+                    {"reason": {"$regex": "warning|limit|restrict|remove|copyright|music", "$options": "i"}},
+                ],
+            },
+            {"_id": 0, "reviewed_at": 1, "created_at": 1},
+            sort=[("reviewed_at", -1), ("created_at", -1)],
+        )
+        if latest_negative:
+            last_negative_at = parse_datetime_or_none(latest_negative.get("reviewed_at") or latest_negative.get("created_at"))
+    else:
+        with get_sqlite_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COALESCE(trust_score, 100) AS trust_score, trust_recovery_last_at FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            trust_score = int(row["trust_score"] if row else 100)
+            last_recovery_at = parse_datetime_or_none(row["trust_recovery_last_at"] if row else None)
+            cursor.execute(
+                """
+                SELECT reviewed_at, created_at
+                FROM moderation_queue
+                WHERE user_id = ?
+                  AND status IN ('rejected', 'resolved')
+                  AND (
+                    LOWER(COALESCE(reviewed_reason, '')) LIKE '%warning%'
+                    OR LOWER(COALESCE(reviewed_reason, '')) LIKE '%limit%'
+                    OR LOWER(COALESCE(reviewed_reason, '')) LIKE '%restrict%'
+                    OR LOWER(COALESCE(reviewed_reason, '')) LIKE '%remove%'
+                    OR LOWER(COALESCE(reviewed_reason, '')) LIKE '%copyright%'
+                    OR LOWER(COALESCE(reviewed_reason, '')) LIKE '%music%'
+                    OR LOWER(COALESCE(reason, '')) LIKE '%copyright%'
+                    OR LOWER(COALESCE(reason, '')) LIKE '%music%'
+                  )
+                ORDER BY datetime(COALESCE(reviewed_at, created_at)) DESC
+                LIMIT 1
+                """,
+                (user_id,),
+            )
+            negative_row = cursor.fetchone()
+            if negative_row:
+                last_negative_at = parse_datetime_or_none(negative_row["reviewed_at"] or negative_row["created_at"])
+
+    baseline = max(filter(None, [last_negative_at, last_recovery_at]), default=None)
+    next_recovery_at = ((baseline or now) + timedelta(hours=24)).isoformat()
+    applied_delta = 0
+    eligible = trust_score < recovery_cap
+
+    if baseline and baseline > now:
+        eligible = False
+    if eligible:
+        elapsed_hours = ((now - baseline).total_seconds() / 3600) if baseline else 24
+        full_days = int(elapsed_hours // 24)
+        if full_days > 0:
+            daily_delta = 1 if trust_score < 55 else 2
+            applied_delta = min(recovery_cap - trust_score, full_days * daily_delta)
+            if applied_delta > 0:
+                trust_score += applied_delta
+                recovery_time = now.isoformat()
+                if db is not None:
+                    await db.users.update_one({"user_id": user_id}, {"$set": {"trust_score": trust_score, "trust_recovery_last_at": recovery_time}})
+                else:
+                    with get_sqlite_connection() as conn:
+                        cursor = conn.cursor()
+                        cursor.execute(
+                            "UPDATE users SET trust_score = ?, trust_recovery_last_at = ? WHERE user_id = ?",
+                            (trust_score, recovery_time, user_id),
+                        )
+                        conn.commit()
+                push_audit_log(
+                    "trust_score_recovered",
+                    user_id,
+                    details=json.dumps({"delta": applied_delta, "score": trust_score, "cap": recovery_cap}),
+                )
+                next_recovery_at = (now + timedelta(hours=24)).isoformat()
+
+    return {
+        "trust_score": trust_score,
+        "applied_delta": applied_delta,
+        "next_recovery_at": next_recovery_at,
+        "recovery_cap": recovery_cap,
+        "last_negative_at": last_negative_at.isoformat() if last_negative_at else None,
+    }
+
+
+async def create_system_notification(
+    user_id: str,
+    notification_type: str,
+    post_id: Optional[str] = None,
+    comment_id: Optional[str] = None,
+) -> None:
+    actor = {
+        "user_id": "system",
+        "username": "YOSLA",
+        "profile_picture": None,
+    }
+    if db is not None:
+        await db.notifications.insert_one({
+            "notification_id": f"notif_{uuid.uuid4().hex[:12]}",
+            "user_id": user_id,
+            "actor_user_id": actor["user_id"],
+            "actor_username": actor["username"],
+            "actor_profile_picture": actor["profile_picture"],
+            "type": notification_type,
+            "post_id": post_id,
+            "comment_id": comment_id,
+            "created_at": utc_now(),
+            "is_read": False,
+        })
+        return
+    create_sqlite_notification(user_id, actor, notification_type, post_id=post_id, comment_id=comment_id)
+
+
+async def get_post_summary_for_moderation(post_id: str) -> Optional[Dict[str, Any]]:
+    if not post_id:
+        return None
+    if db is not None:
+        post = await db.posts.find_one({"post_id": post_id}, {"_id": 0})
+        if not post:
+            return None
+        author_id = str(post.get("user_id") or "")
+        trust_score = 100
+        if author_id:
+            author = await db.users.find_one({"user_id": author_id}, {"_id": 0, "trust_score": 1})
+            trust_score = int((author or {}).get("trust_score", 100) or 100)
+        text = str(post.get("text", "") or "").strip()
+        return {
+            "post_id": post.get("post_id"),
+            "user_id": author_id,
+            "username": post.get("username"),
+            "text": text[:160],
+            "title": post.get("title"),
+            "copyright_status": post.get("copyright_status") or "clear",
+            "music_risk": post.get("music_risk") or "none",
+            "distribution_limited": bool(post.get("distribution_limited")),
+            "trust_score": trust_score,
+        }
+    return sqlite_get_post_summary(post_id)
+
 def get_sqlite_connection() -> sqlite3.Connection:
     if SQLITE_DB_PATH is None:
         raise RuntimeError("SQLite database is not configured")
@@ -2099,11 +3082,81 @@ def get_sqlite_connection() -> sqlite3.Connection:
         UNIQUE(user_id, community_name)
     )
     ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS post_reactions (
+        reaction_id TEXT PRIMARY KEY,
+        post_id TEXT,
+        user_id TEXT,
+        reaction_type TEXT,
+        created_at TEXT,
+        UNIQUE(post_id, user_id)
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS poll_votes (
+        vote_id TEXT PRIMARY KEY,
+        post_id TEXT,
+        user_id TEXT,
+        option_id TEXT,
+        created_at TEXT,
+        UNIQUE(post_id, user_id)
+    )
+    ''')
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS bookmarks (
+        bookmark_id TEXT PRIMARY KEY,
+        post_id TEXT,
+        user_id TEXT,
+        created_at TEXT,
+        UNIQUE(post_id, user_id)
+    )
+    ''')
+    try:
+        cursor.execute("ALTER TABLE posts ADD COLUMN poll TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE posts ADD COLUMN reaction_counts TEXT DEFAULT '{}'")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE posts ADD COLUMN title TEXT")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE posts ADD COLUMN duration INTEGER")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE posts ADD COLUMN visibility TEXT DEFAULT 'public'")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE posts ADD COLUMN status TEXT DEFAULT 'ready'")
+    except Exception:
+        pass
+    for column_sql in (
+        "ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0",
+        "ALTER TABLE posts ADD COLUMN watch_time REAL DEFAULT 0",
+        "ALTER TABLE posts ADD COLUMN completion_rate REAL DEFAULT 0",
+        "ALTER TABLE posts ADD COLUMN replay_count INTEGER DEFAULT 0",
+        "ALTER TABLE posts ADD COLUMN copyright_status TEXT DEFAULT 'clear'",
+        "ALTER TABLE posts ADD COLUMN music_risk TEXT DEFAULT 'none'",
+        "ALTER TABLE posts ADD COLUMN music_warning_acknowledged INTEGER DEFAULT 0",
+        "ALTER TABLE posts ADD COLUMN distribution_limited INTEGER DEFAULT 0",
+        "ALTER TABLE users ADD COLUMN trust_score INTEGER DEFAULT 100",
+        "ALTER TABLE users ADD COLUMN trust_recovery_last_at TEXT",
+    ):
+        try:
+            cursor.execute(column_sql)
+        except Exception:
+            pass
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_message_presence_thread_updated ON message_presence(thread_id, updated_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_thread_id_created_at ON messages(thread_id, created_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient_is_read ON messages(recipient_user_id, is_read)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_user_presence_last_active ON user_presence(last_active_at DESC)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_community_memberships_name ON community_memberships(community_name)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_bookmarks_user_created ON bookmarks(user_id, created_at DESC)")
     conn.commit()
     return conn
 
@@ -2502,10 +3555,17 @@ def sqlite_get_post_summary(post_id: str) -> Optional[Dict[str, Any]]:
     if not post:
         return None
     text = str(post.get("text", "") or "").strip()
+    author_id = str(post.get("user_id") or "")
     return {
         "post_id": post.get("post_id"),
+        "user_id": author_id,
         "username": post.get("username"),
         "text": text[:160],
+        "title": post.get("title"),
+        "copyright_status": post.get("copyright_status") or "clear",
+        "music_risk": post.get("music_risk") or "none",
+        "distribution_limited": bool(post.get("distribution_limited")),
+        "trust_score": get_sqlite_user_trust_score(author_id) if author_id else 100,
     }
 
 def sqlite_update_moderation_queue_status(moderation_id: str, status: str) -> bool:
@@ -2517,6 +3577,15 @@ def sqlite_update_moderation_queue_status(moderation_id: str, status: str) -> bo
         )
         conn.commit()
         return cursor.rowcount > 0
+
+
+def get_sqlite_user_trust_score(user_id: str) -> int:
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COALESCE(trust_score, 100) AS trust_score FROM users WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        return int(row["trust_score"] if row else 100)
+
 
 def sqlite_get_finance_snapshot() -> Dict[str, Any]:
     with get_sqlite_connection() as conn:
@@ -3383,10 +4452,90 @@ def normalize_post_payload(post: Dict[str, Any]) -> Dict[str, Any]:
                 normalized[field_name] = []
         elif value is None:
             normalized[field_name] = []
+    poll_value = normalized.get("poll")
+    if isinstance(poll_value, str):
+        try:
+            parsed_poll = json.loads(poll_value) if poll_value else None
+            normalized["poll"] = parsed_poll if isinstance(parsed_poll, dict) else None
+        except Exception:
+            normalized["poll"] = None
+    elif poll_value is None:
+        normalized["poll"] = None
+    reaction_value = normalized.get("reaction_counts")
+    if isinstance(reaction_value, str):
+        try:
+            parsed_reactions = json.loads(reaction_value) if reaction_value else {}
+            normalized["reaction_counts"] = parsed_reactions if isinstance(parsed_reactions, dict) else {}
+        except Exception:
+            normalized["reaction_counts"] = {}
+    elif not isinstance(reaction_value, dict):
+        normalized["reaction_counts"] = {}
+    normalized["user_reaction"] = normalized.get("user_reaction") or None
     normalized["is_nsfw"] = bool(normalized.get("is_nsfw", False))
+    normalized["copyright_status"] = normalized.get("copyright_status") or "clear"
+    normalized["music_risk"] = normalized.get("music_risk") or "none"
+    normalized["music_warning_acknowledged"] = bool(normalized.get("music_warning_acknowledged", False))
+    normalized["distribution_limited"] = bool(normalized.get("distribution_limited", False))
+    normalized["type"] = normalized.get("type") or None
+    normalized["is_clip"] = bool(normalized.get("is_clip", False))
+    normalized["source"] = normalized.get("source") or None
+    normalized["status"] = normalized.get("status") if normalized.get("status") in VIDEO_PROCESSING_STATUSES else "ready"
+    normalized["videoUrl"] = normalized.get("videoUrl") or normalized.get("video")
+    normalized["thumbnailUrl"] = normalized.get("thumbnailUrl") or normalized.get("image")
+    normalized["title"] = normalized.get("title") or None
+    normalized["authorId"] = normalized.get("authorId") or normalized.get("user_id")
+    duration_value = normalized.get("duration")
+    try:
+        normalized["duration"] = int(duration_value) if duration_value is not None else None
+    except Exception:
+        normalized["duration"] = None
+    for int_metric in ("views", "replay_count"):
+        try:
+            normalized[int_metric] = int(normalized.get(int_metric, 0) or 0)
+        except Exception:
+            normalized[int_metric] = 0
+    for float_metric in ("watch_time", "completion_rate"):
+        try:
+            normalized[float_metric] = float(normalized.get(float_metric, 0) or 0)
+        except Exception:
+            normalized[float_metric] = 0
+    normalized["visibility"] = normalized.get("visibility") or "public"
     if normalized.get("video") is None:
         normalized["video"] = None
     return normalized
+
+def build_poll_payload(question: str, options: List[str]) -> Optional[Dict[str, Any]]:
+    cleaned_question = str(question or "").strip()
+    cleaned_options = [str(option or "").strip() for option in options if str(option or "").strip()]
+    if not cleaned_question or len(cleaned_options) < 2:
+        return None
+    cleaned_options = cleaned_options[:4]
+    return {
+        "question": cleaned_question[:240],
+        "options": [
+            {"option_id": f"opt_{index + 1}", "text": option[:120], "votes_count": 0}
+            for index, option in enumerate(cleaned_options)
+        ],
+        "total_votes": 0,
+        "user_vote": None,
+    }
+
+def parse_poll_form_payload(raw_poll: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not raw_poll:
+        return None
+    try:
+        payload = json.loads(raw_poll)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid poll payload")
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid poll payload")
+    options = payload.get("options") or []
+    if not isinstance(options, list):
+        raise HTTPException(status_code=400, detail="Invalid poll options")
+    poll = build_poll_payload(str(payload.get("question") or ""), [str(option) for option in options])
+    if not poll:
+        raise HTTPException(status_code=400, detail="Poll requires a question and at least two options")
+    return poll
 
 def sqlite_get_user_interest_keywords(user_id: str) -> List[str]:
     # The SQLite path derives the same interest profile from UserInteractions,
@@ -3643,6 +4792,12 @@ def score_posts_with_user_signals(
             score -= 2
         if int(profile.get("followers_count", 0) or 0) == 0 and int(profile.get("following_count", 0) or 0) == 0:
             score -= 1
+        if post.get("distribution_limited"):
+            score -= 24
+        if str(post.get("copyright_status") or "clear") != "clear":
+            score -= 12
+        if str(post.get("music_risk") or "none") in {"medium", "high"}:
+            score -= 8
         scored.append((score, post))
     scored.sort(key=lambda item: item[0], reverse=True)
     return [post for _, post in scored]
@@ -3942,11 +5097,13 @@ def create_sqlite_post(post: Dict[str, Any]) -> None:
         keywords_json = json.dumps(keywords)
         hashtags_json = json.dumps(post.get("hashtags") or [])
         mentions_json = json.dumps(post.get("mentions") or [])
+        poll_json = json.dumps(post.get("poll")) if post.get("poll") else None
+        reaction_counts_json = json.dumps(post.get("reaction_counts") or {})
         cursor.execute(
             """
             INSERT INTO posts (
-                post_id, user_id, username, profile_picture, text, image, video, repost_post_id, repost_count, likes_count, comments_count, created_at, keywords, hashtags, mentions, is_nsfw
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, status, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, created_at, keywords, hashtags, mentions, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 post["post_id"],
@@ -3956,6 +5113,15 @@ def create_sqlite_post(post: Dict[str, Any]) -> None:
                 post.get("text", ""),
                 post.get("image"),
                 post.get("video"),
+                post.get("title"),
+                post.get("duration"),
+                post.get("visibility") or "public",
+                post.get("type"),
+                int(bool(post.get("is_clip", False))),
+                post.get("source"),
+                post.get("status") or "ready",
+                poll_json,
+                reaction_counts_json,
                 post.get("repost_post_id"),
                 int(post.get("repost_count", 0) or 0),
                 post.get("likes_count", 0),
@@ -3965,6 +5131,10 @@ def create_sqlite_post(post: Dict[str, Any]) -> None:
                 hashtags_json,
                 mentions_json,
                 int(bool(post.get("is_nsfw", False))),
+                post.get("copyright_status") or "clear",
+                post.get("music_risk") or "none",
+                int(bool(post.get("music_warning_acknowledged", False))),
+                int(bool(post.get("distribution_limited", False))),
             ),
         )
         cursor.execute(
@@ -3972,6 +5142,17 @@ def create_sqlite_post(post: Dict[str, Any]) -> None:
             (post["user_id"],),
         )
         conn.commit()
+
+
+def update_sqlite_post_processing_result(post_id: str, video_url: Optional[str], status: str) -> Optional[Dict[str, Any]]:
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE posts SET video = ?, status = ? WHERE post_id = ?",
+            (video_url, status, post_id),
+        )
+        conn.commit()
+    return get_sqlite_post(post_id)
 
 
 def get_sqlite_feed(skip: int = 0, limit: int = 20, user_ids: Optional[List[str]] = None, hide_nsfw: bool = False) -> List[Dict[str, Any]]:
@@ -3982,7 +5163,7 @@ def get_sqlite_feed(skip: int = 0, limit: int = 20, user_ids: Optional[List[str]
             nsfw_clause = " AND COALESCE(is_nsfw, 0) = 0" if hide_nsfw else ""
             cursor.execute(
                 f"""
-                SELECT post_id, user_id, username, profile_picture, text, image, video, repost_post_id, repost_count, likes_count, comments_count, created_at, is_nsfw
+                SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
                 , keywords, hashtags, mentions
                 FROM posts
                 WHERE user_id IN ({placeholders}){nsfw_clause}
@@ -3995,7 +5176,7 @@ def get_sqlite_feed(skip: int = 0, limit: int = 20, user_ids: Optional[List[str]
             nsfw_clause = "WHERE COALESCE(is_nsfw, 0) = 0" if hide_nsfw else ""
             cursor.execute(
                 f"""
-                SELECT post_id, user_id, username, profile_picture, text, image, video, repost_post_id, repost_count, likes_count, comments_count, created_at, is_nsfw
+                SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
                 , keywords, hashtags, mentions
                 FROM posts
                 {nsfw_clause}
@@ -4008,12 +5189,41 @@ def get_sqlite_feed(skip: int = 0, limit: int = 20, user_ids: Optional[List[str]
         return [dict(row) for row in rows]
 
 
+def get_sqlite_media_posts(skip: int = 0, limit: int = 80, hide_nsfw: bool = False) -> List[Dict[str, Any]]:
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        nsfw_clause = "AND COALESCE(is_nsfw, 0) = 0" if hide_nsfw else ""
+        cursor.execute(
+            f"""
+            SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, poll, reaction_counts,
+                   repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited, keywords, hashtags, mentions
+            FROM posts
+            WHERE (
+                COALESCE(image, '') != ''
+                OR COALESCE(video, '') != ''
+                OR type IN ('video', 'live_replay', 'live_recording', 'clip')
+                OR source = 'live_replay'
+                OR source = 'live_recording'
+                OR COALESCE(is_clip, 0) = 1
+                OR text LIKE '%Live Replay%'
+                OR text LIKE '%Live Recording%'
+                OR text LIKE 'Tallenne:%'
+            )
+            {nsfw_clause}
+            ORDER BY datetime(created_at) DESC
+            LIMIT ? OFFSET ?
+            """,
+            (limit, skip),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+
 def get_sqlite_post(post_id: str) -> Optional[Dict[str, Any]]:
     with get_sqlite_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT post_id, user_id, username, profile_picture, text, image, video, repost_post_id, repost_count, likes_count, comments_count, created_at, is_nsfw, keywords
+            SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited, keywords
             , hashtags, mentions
             FROM posts
             WHERE post_id = ?
@@ -4116,6 +5326,170 @@ def sqlite_toggle_like(post_id: str, user_id: str) -> Dict[str, Any]:
         likes_count = int(count_row["likes_count"]) if count_row else 0
         conn.commit()
         return {"is_liked": is_liked, "likes_count": likes_count}
+
+def sqlite_set_post_reaction(post_id: str, user_id: str, reaction_type: str) -> Dict[str, Any]:
+    allowed = {"fire", "idea", "rocket"}
+    if reaction_type not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported reaction")
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT post_id, reaction_counts FROM posts WHERE post_id = ?", (post_id,))
+        post_row = cursor.fetchone()
+        if not post_row:
+            raise HTTPException(status_code=404, detail="Post not found")
+        cursor.execute("SELECT reaction_type FROM post_reactions WHERE post_id = ? AND user_id = ?", (post_id, user_id))
+        existing = cursor.fetchone()
+        previous = existing["reaction_type"] if existing else None
+        if existing:
+            cursor.execute(
+                "UPDATE post_reactions SET reaction_type = ?, created_at = ? WHERE post_id = ? AND user_id = ?",
+                (reaction_type, utc_iso_now(), post_id, user_id),
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO post_reactions (reaction_id, post_id, user_id, reaction_type, created_at) VALUES (?, ?, ?, ?, ?)",
+                (f"reaction_{uuid.uuid4().hex[:12]}", post_id, user_id, reaction_type, utc_iso_now()),
+            )
+        counts: Dict[str, int] = {}
+        try:
+            counts = json.loads(post_row["reaction_counts"] or "{}")
+            if not isinstance(counts, dict):
+                counts = {}
+        except Exception:
+            counts = {}
+        if previous and previous != reaction_type:
+            counts[previous] = max(0, int(counts.get(previous, 0) or 0) - 1)
+        if previous != reaction_type:
+            counts[reaction_type] = int(counts.get(reaction_type, 0) or 0) + 1
+        cursor.execute("UPDATE posts SET reaction_counts = ? WHERE post_id = ?", (json.dumps(counts), post_id))
+        conn.commit()
+        return {"reaction_type": reaction_type, "reaction_counts": counts}
+
+def sqlite_vote_poll(post_id: str, user_id: str, option_id: str) -> Dict[str, Any]:
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT poll FROM posts WHERE post_id = ?", (post_id,))
+        post_row = cursor.fetchone()
+        if not post_row:
+            raise HTTPException(status_code=404, detail="Post not found")
+        try:
+            poll = json.loads(post_row["poll"] or "null")
+        except Exception:
+            poll = None
+        if not isinstance(poll, dict):
+            raise HTTPException(status_code=400, detail="Post has no poll")
+        valid_option_ids = {str(option.get("option_id")) for option in poll.get("options", []) if isinstance(option, dict)}
+        if option_id not in valid_option_ids:
+            raise HTTPException(status_code=400, detail="Invalid poll option")
+        cursor.execute("SELECT option_id FROM poll_votes WHERE post_id = ? AND user_id = ?", (post_id, user_id))
+        existing = cursor.fetchone()
+        previous_option = existing["option_id"] if existing else None
+        if existing:
+            cursor.execute(
+                "UPDATE poll_votes SET option_id = ?, created_at = ? WHERE post_id = ? AND user_id = ?",
+                (option_id, utc_iso_now(), post_id, user_id),
+            )
+        else:
+            cursor.execute(
+                "INSERT INTO poll_votes (vote_id, post_id, user_id, option_id, created_at) VALUES (?, ?, ?, ?, ?)",
+                (f"vote_{uuid.uuid4().hex[:12]}", post_id, user_id, option_id, utc_iso_now()),
+            )
+        for option in poll.get("options", []):
+            if not isinstance(option, dict):
+                continue
+            current_count = int(option.get("votes_count", 0) or 0)
+            if previous_option and option.get("option_id") == previous_option and previous_option != option_id:
+                current_count = max(0, current_count - 1)
+            if option.get("option_id") == option_id and previous_option != option_id:
+                current_count += 1
+            option["votes_count"] = current_count
+        poll["total_votes"] = sum(int(option.get("votes_count", 0) or 0) for option in poll.get("options", []) if isinstance(option, dict))
+        poll["user_vote"] = option_id
+        cursor.execute("UPDATE posts SET poll = ? WHERE post_id = ?", (json.dumps(poll), post_id))
+        conn.commit()
+        return poll
+
+def sqlite_get_user_reactions(post_ids: List[str], user_id: str) -> Dict[str, str]:
+    if not post_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(post_ids))
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT post_id, reaction_type FROM post_reactions WHERE user_id = ? AND post_id IN ({placeholders})",
+            (user_id, *post_ids),
+        )
+        return {str(row["post_id"]): str(row["reaction_type"]) for row in cursor.fetchall()}
+
+def sqlite_get_user_poll_votes(post_ids: List[str], user_id: str) -> Dict[str, str]:
+    if not post_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(post_ids))
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT post_id, option_id FROM poll_votes WHERE user_id = ? AND post_id IN ({placeholders})",
+            (user_id, *post_ids),
+        )
+        return {str(row["post_id"]): str(row["option_id"]) for row in cursor.fetchall()}
+
+def sqlite_get_user_bookmarks(post_ids: List[str], user_id: str) -> set[str]:
+    if not post_ids:
+        return set()
+    placeholders = ",".join(["?"] * len(post_ids))
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT post_id FROM bookmarks WHERE user_id = ? AND post_id IN ({placeholders})",
+            (user_id, *post_ids),
+        )
+        return {str(row["post_id"]) for row in cursor.fetchall()}
+
+def sqlite_toggle_bookmark(post_id: str, user_id: str) -> Dict[str, Any]:
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT post_id FROM posts WHERE post_id = ?", (post_id,))
+        if not cursor.fetchone():
+            raise HTTPException(status_code=404, detail="Post not found")
+        cursor.execute("SELECT bookmark_id FROM bookmarks WHERE post_id = ? AND user_id = ?", (post_id, user_id))
+        existing = cursor.fetchone()
+        if existing:
+            cursor.execute("DELETE FROM bookmarks WHERE post_id = ? AND user_id = ?", (post_id, user_id))
+            is_bookmarked = False
+        else:
+            cursor.execute(
+                "INSERT INTO bookmarks (bookmark_id, post_id, user_id, created_at) VALUES (?, ?, ?, ?)",
+                (f"bookmark_{uuid.uuid4().hex[:12]}", post_id, user_id, utc_iso_now()),
+            )
+            is_bookmarked = True
+        conn.commit()
+        return {"is_bookmarked": is_bookmarked}
+
+def sqlite_get_bookmarked_posts(user_id: str, skip: int = 0, limit: int = 20, hide_nsfw: bool = False) -> List[Dict[str, Any]]:
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        nsfw_clause = "AND COALESCE(p.is_nsfw, 0) = 0" if hide_nsfw else ""
+        cursor.execute(
+            f"""
+            SELECT p.post_id, p.user_id, p.username, p.profile_picture, p.text, p.image, p.video, p.title, p.duration, p.visibility, p.type, p.is_clip, p.source,
+                   p.poll, p.reaction_counts,
+                   p.repost_post_id, p.repost_count, p.likes_count, p.comments_count, p.created_at, p.is_nsfw,
+                   p.keywords, p.hashtags, p.mentions
+            FROM bookmarks b
+            JOIN posts p ON p.post_id = b.post_id
+            WHERE b.user_id = ? {nsfw_clause}
+            ORDER BY datetime(b.created_at) DESC
+            LIMIT ? OFFSET ?
+            """,
+            (user_id, limit, skip),
+        )
+        return [dict(row) for row in cursor.fetchall()]
+
+def apply_user_poll_votes(posts: List[Dict[str, Any]], votes_by_post: Dict[str, str]) -> None:
+    for post in posts:
+        poll = post.get("poll")
+        if isinstance(poll, dict):
+            poll["user_vote"] = votes_by_post.get(str(post.get("post_id"))) or poll.get("user_vote")
 
 
 def create_sqlite_comment(post_id: str, user: Dict[str, Any], text: str) -> Dict[str, Any]:
@@ -4559,6 +5933,7 @@ async def register(user_data: UserRegister, request: Request):
         "username": user_data.username,
         "profile_picture": None,
         "bio": None,
+        "relationship_status": "private",
         "followers_count": 0,
         "following_count": 0,
         "posts_count": 0,
@@ -4575,7 +5950,7 @@ async def register(user_data: UserRegister, request: Request):
         with get_sqlite_connection() as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO users (user_id, email, password_hash, username, profile_picture, bio, followers_count, following_count, posts_count, created_at, date_of_birth, age_verified_at, role, banned_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO users (user_id, email, password_hash, username, profile_picture, bio, relationship_status, followers_count, following_count, posts_count, created_at, date_of_birth, age_verified_at, role, banned_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     user_id,
                     user_data.email,
@@ -4583,6 +5958,7 @@ async def register(user_data: UserRegister, request: Request):
                     user_data.username,
                     None,
                     None,
+                    "private",
                     0,
                     0,
                     0,
@@ -4749,6 +6125,88 @@ async def get_my_profile(authorization: Optional[str] = Header(None)):
     fresh = await get_user_with_fresh_counts(user["user_id"])
     return UserProfile(**(fresh or user))
 
+
+@api_router.get("/users/me/account-health")
+async def get_my_account_health(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    user_id = user["user_id"]
+    recovery = await apply_trust_score_recovery(user_id)
+    trust_score = int(recovery.get("trust_score", user.get("trust_score", 100)) or 100)
+    if db is not None:
+        fresh_user = await db.users.find_one({"user_id": user_id}, {"_id": 0, "trust_score": 1, "trust_recovery_last_at": 1})
+        trust_score = int((fresh_user or {}).get("trust_score", trust_score) or trust_score)
+        restricted_posts = await db.posts.find(
+            {
+                "user_id": user_id,
+                "$or": [
+                    {"distribution_limited": True},
+                    {"copyright_status": {"$nin": ["clear", None, ""]}},
+                    {"status": "removed"},
+                ],
+            },
+            {"_id": 0, "post_id": 1, "title": 1, "text": 1, "copyright_status": 1, "music_risk": 1, "distribution_limited": 1, "status": 1, "created_at": 1},
+        ).sort("created_at", -1).limit(10).to_list(length=10)
+        decisions = await db.moderation_queue.find(
+            {"user_id": user_id, "status": {"$ne": "pending"}},
+            {"_id": 0, "moderation_id": 1, "target_type": 1, "target_id": 1, "post_id": 1, "status": 1, "reason": 1, "reviewed_reason": 1, "reviewed_at": 1},
+        ).sort("reviewed_at", -1).limit(10).to_list(length=10)
+    else:
+        with get_sqlite_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COALESCE(trust_score, 100) AS trust_score FROM users WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+            if row:
+                trust_score = int(row["trust_score"] or trust_score)
+            cursor.execute(
+                """
+                SELECT post_id, title, text, copyright_status, music_risk, distribution_limited, status, created_at
+                FROM posts
+                WHERE user_id = ?
+                  AND (
+                    COALESCE(distribution_limited, 0) = 1
+                    OR COALESCE(copyright_status, 'clear') NOT IN ('clear', '')
+                    OR status = 'removed'
+                  )
+                ORDER BY datetime(created_at) DESC
+                LIMIT 10
+                """,
+                (user_id,),
+            )
+            restricted_posts = [dict(item) for item in cursor.fetchall()]
+            cursor.execute(
+                """
+                SELECT moderation_id, target_type, target_id, post_id, status, reason, reviewed_reason, reviewed_at
+                FROM moderation_queue
+                WHERE user_id = ? AND status != 'pending'
+                ORDER BY datetime(COALESCE(reviewed_at, created_at)) DESC
+                LIMIT 10
+                """,
+                (user_id,),
+            )
+            decisions = [dict(item) for item in cursor.fetchall()]
+
+    if trust_score >= 80:
+        account_status = "good"
+        recovery_tip = "Tilisi on hyvässä kunnossa. Jatka alkuperäisen sisällön ja turvallisen keskustelun linjalla."
+    elif trust_score >= 55:
+        account_status = "watch"
+        recovery_tip = "Saat +2 Trust Score -pistettä vuorokaudessa ilman uusia rikkomuksia, kunnes automaattinen palautumiskatto täyttyy."
+    else:
+        account_status = "restricted"
+        recovery_tip = "Saat +1 Trust Score -pisteen vuorokaudessa ilman uusia rikkomuksia. Vakavat poistot vaativat yhä moderoinnin hyväksynnän."
+    if int(recovery.get("applied_delta") or 0) > 0:
+        recovery_tip = f"Trust Score palautui juuri +{recovery['applied_delta']} pistettä. " + recovery_tip
+
+    return {
+        "trust_score": trust_score,
+        "status": account_status,
+        "active_restrictions_count": len(restricted_posts),
+        "restricted_posts": restricted_posts,
+        "recent_decisions": decisions,
+        "recovery_tip": recovery_tip,
+        "recovery": recovery,
+    }
+
 @api_router.put("/users/me", response_model=UserProfile)
 async def update_my_profile(
     update_data: UserUpdate,
@@ -4758,6 +6216,12 @@ async def update_my_profile(
     user = await get_current_user(authorization)
     
     update_dict = update_data.dict(exclude_unset=True)
+    if "relationship_status" in update_dict:
+        allowed_statuses = {"single", "relationship", "complicated", "private"}
+        next_status = update_dict.get("relationship_status") or "private"
+        if next_status not in allowed_statuses:
+            raise HTTPException(status_code=400, detail="Invalid relationship status")
+        update_dict["relationship_status"] = next_status
     
     if "username" in update_dict:
         if db is not None:
@@ -4810,21 +6274,41 @@ async def get_user_profile(user_id: str, authorization: Optional[str] = Header(N
 
 @api_router.post("/posts", response_model=Post)
 async def create_post(
+    background_tasks: BackgroundTasks,
     text: Optional[str] = Form(None),
     image: Optional[UploadFile] = File(None),
     video: Optional[UploadFile] = File(None),
+    type: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    duration: Optional[int] = Form(None),
+    visibility: str = Form("public"),
+    is_clip: bool = Form(False),
+    source: Optional[str] = Form(None),
+    poll: Optional[str] = Form(None),
     is_nsfw: bool = Form(False),
     authorization: Optional[str] = Header(None),
     request: Request = None
 ):
     """Create a new post. Accepts multipart/form-data with optional image or video file."""
+    auth_scheme = ""
+    if authorization:
+        auth_scheme = authorization.split(" ", 1)[0]
+    logger.info(
+        "POST /api/posts received: authorization_present=%s authorization_scheme=%s",
+        bool(authorization),
+        auth_scheme or "missing",
+    )
     if request is not None:
         await ensure_request_ip_not_blacklisted(request)
     user = await get_current_user(authorization)
+    logger.info("POST /api/posts authenticated user: user_id=%s username=%s", user.get("user_id"), user.get("username"))
     ensure_not_banned(user)
+    logger.info("POST /api/posts upload started: user_id=%s", user.get("user_id"))
 
-    if (not text or not text.strip()) and image is None and video is None:
-        raise HTTPException(status_code=400, detail="Post must contain text, an image, or a video")
+    poll_payload = parse_poll_form_payload(poll)
+
+    if (not text or not text.strip()) and image is None and video is None and poll_payload is None:
+        raise HTTPException(status_code=400, detail="Post must contain text, an image, a video, or a poll")
 
     client_ip = normalize_ip(get_client_ip(request))
     locale_hint = normalize_locale_hint((request.headers.get("accept-language") if request else None))
@@ -4861,15 +6345,79 @@ async def create_post(
             raise HTTPException(status_code=500, detail="Failed to save uploaded image")
 
     video_url = None
+    processing_source_path: Optional[Path] = None
+    processing_original_filename: Optional[str] = None
+    processing_content_type: Optional[str] = None
+    is_async_live_recording = False
     if video is not None:
         try:
             contents = await video.read()
-            video_url = transcode_video_upload(contents, video, post_id)
+            requested_type = type.strip() if type else ""
+            is_live_recording_upload = requested_type == "live_recording"
+            if len(contents) > MAX_POST_UPLOAD_BYTES:
+                logger.warning(
+                    "Post video upload rejected: user=%s type=%s filename=%s bytes=%s max_bytes=%s",
+                    user["user_id"],
+                    requested_type or "auto",
+                    video.filename,
+                    len(contents),
+                    MAX_POST_UPLOAD_BYTES,
+                )
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"Upload failed: file size exceeds {MAX_POST_UPLOAD_BYTES // (1024 * 1024)} MB limit",
+                )
+            if requested_type == "live_recording" and not contents:
+                raise HTTPException(status_code=400, detail="Upload failed: live recording file is empty")
+            if is_live_recording_upload:
+                logger.info(
+                    "[recording] upload received: post_id=%s user=%s filename=%s content_type=%s bytes=%s",
+                    post_id,
+                    user["user_id"],
+                    video.filename,
+                    video.content_type,
+                    len(contents),
+                )
+            logger.info(
+                "Post video upload received: user=%s type=%s filename=%s content_type=%s bytes=%s",
+                user["user_id"],
+                requested_type or "auto",
+                video.filename,
+                video.content_type,
+                len(contents),
+            )
+            if is_live_recording_upload:
+                source_ext = _validate_upload_extension(video, ALLOWED_VIDEO_EXTENSIONS, "video")
+                processing_source_path = uploads_dir / f"{post_id}_source{source_ext}"
+                processing_source_path.write_bytes(contents)
+                processing_original_filename = video.filename or f"{post_id}{source_ext}"
+                processing_content_type = video.content_type
+                is_async_live_recording = True
+                logger.info(
+                    "[recording] file saved: post_id=%s path=%s bytes=%s status=processing",
+                    post_id,
+                    processing_source_path,
+                    len(contents),
+                )
+            else:
+                video_url = transcode_video_upload(contents, video, post_id, allow_original_fallback=False)
+                logger.info("Post video upload stored: post_id=%s video_url=%s", post_id, video_url)
         except HTTPException:
             raise
         except Exception as e:
-            logger.error(f"Error saving uploaded video: {e}")
-            raise HTTPException(status_code=500, detail="Failed to save uploaded video")
+            logger.error("[recording] upload failed: post_id=%s error=%s", post_id, e)
+            raise HTTPException(status_code=500, detail=f"Upload endpoint failed: {e}")
+
+    if (type.strip() if type else "") == "live_recording" and not (video_url or is_async_live_recording):
+        raise HTTPException(status_code=400, detail="Database insert failed: videoUrl is required")
+
+    requested_source = source.strip() if source else None
+    requested_type = type.strip() if type else None
+    music_risk = detect_music_risk(
+        " ".join(part for part in [text or "", title or ""] if part),
+        has_video=video is not None or bool(video_url) or is_async_live_recording,
+        source=requested_source or requested_type,
+    )
 
     post = {
         "post_id": post_id,
@@ -4879,22 +6427,56 @@ async def create_post(
         "text": text.strip() if text else '',
         "image": image_url,
         "video": video_url,
+        "videoUrl": video_url,
+        "thumbnailUrl": image_url,
+        "title": title.strip() if title else None,
+        "authorId": user["user_id"],
+        "duration": duration,
+        "visibility": visibility.strip() if visibility else "public",
+        "type": (requested_type if requested_type else ("video" if video_url else "image" if image_url else None)),
+        "is_clip": bool(is_clip),
+        "source": requested_source,
+        "status": "processing" if is_async_live_recording else "ready",
+        "poll": poll_payload,
+        "reaction_counts": {},
         "hashtags": extract_hashtags_from_text(text or ""),
         "mentions": extract_mentions_from_text(text or ""),
         "likes_count": 0,
         "comments_count": 0,
         "is_nsfw": bool(is_nsfw),
+        "copyright_status": music_risk["copyright_status"],
+        "music_risk": music_risk["music_risk"],
+        "music_warning_acknowledged": bool(music_risk["music_warning_acknowledged"]),
+        "distribution_limited": bool(music_risk["distribution_limited"]),
         "created_at": datetime.now(timezone.utc),
         "keywords": extract_post_keywords(text or ""),
     }
 
+    try:
+        if db is not None:
+            await db.posts.insert_one(post)
+            # Increment user's post count
+            await db.users.update_one(
+                {"user_id": user["user_id"]},
+                {"$inc": {"posts_count": 1}}
+            )
+        elif REPOSITORY_ADAPTER is not None:
+            REPOSITORY_ADAPTER.create_post(post)
+        else:
+            create_sqlite_post(post)
+        if post.get("type") == "live_recording":
+            logger.info(
+                "[recording] database insert completed: post_id=%s videoUrl=%s storage=%s",
+                post_id,
+                post.get("video"),
+                "mongodb" if db is not None else "repository" if REPOSITORY_ADAPTER is not None else "sqlite",
+            )
+            logger.info("[recording] media post created: post_id=%s type=%s visibility=%s", post_id, post.get("type"), post.get("visibility"))
+    except Exception as exc:
+        logger.error("[recording] database insert failed: post_id=%s type=%s videoUrl=%s error=%s", post_id, post.get("type"), post.get("video"), exc)
+        raise HTTPException(status_code=500, detail=f"Database insert failed: {exc}")
+
     if db is not None:
-        await db.posts.insert_one(post)
-        # Increment user's post count
-        await db.users.update_one(
-            {"user_id": user["user_id"]},
-            {"$inc": {"posts_count": 1}}
-        )
         if moderation.queue:
             moderation_doc = {
                 "moderation_id": f"mod_{uuid.uuid4().hex[:12]}",
@@ -4915,11 +6497,21 @@ async def create_post(
                 actor_id=user["user_id"],
                 details=json.dumps({"target_type": "post", "score": moderation.score, "reason": moderation.reason or "needs-review", "status": "queued", "storage": "mongodb"}),
             )
+        if post.get("distribution_limited") and post.get("music_risk") == "high":
+            await db.moderation_queue.insert_one({
+                "moderation_id": f"mod_{uuid.uuid4().hex[:12]}",
+                "target_type": "post",
+                "target_id": post_id,
+                "user_id": user["user_id"],
+                "score": 35,
+                "status": "pending",
+                "reason": "music/copyright risk",
+                "created_at": utc_now(),
+                "text": post["text"],
+                "post_id": post_id,
+            })
+            await adjust_user_trust_score(user["user_id"], -3, "music_risk_high")
     else:
-        if REPOSITORY_ADAPTER is not None:
-            REPOSITORY_ADAPTER.create_post(post)
-        else:
-            create_sqlite_post(post)
         if moderation.queue:
             moderation_doc = {
                 "moderation_id": f"mod_{uuid.uuid4().hex[:12]}",
@@ -4940,10 +6532,212 @@ async def create_post(
                 actor_id=user["user_id"],
                 details=json.dumps({"target_type": "post", "score": moderation.score, "reason": moderation.reason or "needs-review", "status": "queued", "storage": "sqlite"}),
             )
+        if post.get("distribution_limited") and post.get("music_risk") == "high":
+            sqlite_queue_moderation_item({
+                "moderation_id": f"mod_{uuid.uuid4().hex[:12]}",
+                "target_type": "post",
+                "target_id": post_id,
+                "user_id": user["user_id"],
+                "score": 35,
+                "status": "pending",
+                "reason": "music/copyright risk",
+                "created_at": utc_iso_now(),
+                "text": post["text"],
+                "post_id": post_id,
+            })
+            await adjust_user_trust_score(user["user_id"], -3, "music_risk_high")
 
     _dispatch_mention_notifications(post, post.get("mentions") or [])
     post.pop("_id", None)
+    if is_async_live_recording:
+        if not processing_source_path or not processing_original_filename:
+            raise HTTPException(status_code=500, detail="Upload endpoint failed: processing source file is missing")
+        background_tasks.add_task(
+            enqueue_live_recording_processing,
+            post_id,
+            str(processing_source_path),
+            processing_original_filename,
+            processing_content_type,
+        )
+        logger.info("[recording] background task queued: post_id=%s status=processing", post_id)
+        return JSONResponse(status_code=202, content=jsonable_encoder({**post, "is_liked": False}))
     return Post(**post, is_liked=False)
+
+
+def _safe_chunk_upload_id(upload_id: str) -> str:
+    cleaned = (upload_id or "").strip()
+    if not cleaned or len(cleaned) > 80 or not all(ch.isalnum() or ch in ("_", "-") for ch in cleaned):
+        raise HTTPException(status_code=400, detail="Invalid chunk upload id")
+    return cleaned
+
+
+@api_router.post("/live-recordings/chunks")
+async def upload_live_recording_chunk(
+    upload_id: str = Form(...),
+    index: int = Form(...),
+    total_chunks: int = Form(...),
+    chunk: UploadFile = File(...),
+    authorization: str = Header(None),
+    request: Request = None,
+):
+    if request is not None:
+        await ensure_request_ip_not_blacklisted(request)
+    user = await get_current_user(authorization)
+    ensure_not_banned(user)
+    safe_upload_id = _safe_chunk_upload_id(upload_id)
+    if index < 0 or total_chunks <= 0 or index >= total_chunks:
+        raise HTTPException(status_code=400, detail="Invalid chunk index")
+    upload_dir = chunk_uploads_dir / safe_upload_id
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    contents = await chunk.read()
+    if not contents:
+        raise HTTPException(status_code=400, detail="Upload failed: chunk is empty")
+    if len(contents) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="Upload failed: chunk exceeds 8 MB limit")
+    metadata = {
+        "user_id": user["user_id"],
+        "total_chunks": total_chunks,
+        "updated_at": utc_iso_now(),
+    }
+    (upload_dir / "metadata.json").write_text(json.dumps(metadata), encoding="utf-8")
+    (upload_dir / f"{index:06d}.part").write_bytes(contents)
+    logger.info(
+        "[recording] chunk received: upload_id=%s user=%s index=%s total=%s bytes=%s",
+        safe_upload_id,
+        user["user_id"],
+        index,
+        total_chunks,
+        len(contents),
+    )
+    return {"uploadId": safe_upload_id, "index": index, "received": True}
+
+
+@api_router.post("/live-recordings/chunks/complete")
+async def complete_live_recording_chunks(
+    background_tasks: BackgroundTasks,
+    upload_id: str = Form(...),
+    total_chunks: int = Form(...),
+    filename: str = Form("live-recording.webm"),
+    content_type: str = Form("video/webm"),
+    text: str = Form(""),
+    title: Optional[str] = Form(None),
+    duration: Optional[int] = Form(None),
+    visibility: str = Form("public"),
+    topic: Optional[str] = Form(None),
+    image: UploadFile = File(None),
+    authorization: str = Header(None),
+    request: Request = None,
+):
+    if request is not None:
+        await ensure_request_ip_not_blacklisted(request)
+    user = await get_current_user(authorization)
+    ensure_not_banned(user)
+    safe_upload_id = _safe_chunk_upload_id(upload_id)
+    upload_dir = chunk_uploads_dir / safe_upload_id
+    if not upload_dir.exists():
+        raise HTTPException(status_code=404, detail="Chunk upload session not found")
+    metadata_path = upload_dir / "metadata.json"
+    if metadata_path.exists():
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except Exception:
+            metadata = {}
+        if metadata.get("user_id") and metadata.get("user_id") != user["user_id"]:
+            raise HTTPException(status_code=403, detail="Chunk upload belongs to another user")
+    if total_chunks <= 0:
+        raise HTTPException(status_code=400, detail="Invalid chunk count")
+
+    parts = [upload_dir / f"{index:06d}.part" for index in range(total_chunks)]
+    missing = [index for index, path in enumerate(parts) if not path.exists()]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Missing upload chunks: {missing[:10]}")
+    total_size = sum(path.stat().st_size for path in parts)
+    if total_size <= 0:
+        raise HTTPException(status_code=400, detail="Upload failed: assembled recording is empty")
+    if total_size > MAX_POST_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"Upload failed: file size exceeds {MAX_POST_UPLOAD_BYTES // (1024 * 1024)} MB limit")
+
+    post_id = f"post_{uuid.uuid4().hex[:12]}"
+    source_ext = Path(filename or "").suffix.lower() or ".webm"
+    if source_ext not in ALLOWED_VIDEO_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Unsupported video format")
+    processing_source_path = uploads_dir / f"{post_id}_source{source_ext}"
+    with processing_source_path.open("wb") as output:
+        for part in parts:
+            with part.open("rb") as input_file:
+                shutil.copyfileobj(input_file, output)
+
+    image_url = None
+    if image is not None:
+        try:
+            image_url = optimize_image_upload(await image.read(), image, post_id)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.warning("[recording] chunk thumbnail save failed: post_id=%s error=%s", post_id, exc)
+
+    date_title = title.strip() if title else f"Tallenne: {topic or 'YOSLA Live'}"
+    post_text = text.strip() if text else f"{date_title}\n\nLive Recording"
+    post = {
+        "post_id": post_id,
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "profile_picture": user.get("profile_picture"),
+        "text": post_text,
+        "image": image_url,
+        "video": None,
+        "videoUrl": None,
+        "thumbnailUrl": image_url,
+        "title": date_title,
+        "authorId": user["user_id"],
+        "duration": duration,
+        "visibility": visibility.strip() if visibility else "public",
+        "type": "live_recording",
+        "is_clip": True,
+        "source": "live_recording",
+        "status": "processing",
+        "poll": None,
+        "reaction_counts": {},
+        "hashtags": extract_hashtags_from_text(post_text),
+        "mentions": extract_mentions_from_text(post_text),
+        "likes_count": 0,
+        "comments_count": 0,
+        "is_nsfw": False,
+        "created_at": datetime.now(timezone.utc),
+        "keywords": extract_post_keywords(post_text),
+    }
+    try:
+        if db is not None:
+            await db.posts.insert_one(post)
+            await db.users.update_one({"user_id": user["user_id"]}, {"$inc": {"posts_count": 1}})
+        elif REPOSITORY_ADAPTER is not None:
+            REPOSITORY_ADAPTER.create_post(post)
+        else:
+            create_sqlite_post(post)
+    except Exception as exc:
+        logger.error("[recording] chunk database insert failed: post_id=%s error=%s", post_id, exc)
+        with suppress(Exception):
+            processing_source_path.unlink(missing_ok=True)
+        raise HTTPException(status_code=500, detail=f"Database insert failed: {exc}")
+
+    logger.info(
+        "[recording] chunk upload completed: upload_id=%s post_id=%s chunks=%s bytes=%s source=%s",
+        safe_upload_id,
+        post_id,
+        total_chunks,
+        total_size,
+        processing_source_path,
+    )
+    background_tasks.add_task(
+        enqueue_live_recording_processing,
+        post_id,
+        str(processing_source_path),
+        filename or f"{post_id}{source_ext}",
+        content_type or "video/webm",
+    )
+    with suppress(Exception):
+        shutil.rmtree(upload_dir)
+    return JSONResponse(status_code=202, content=jsonable_encoder({**post, "is_liked": False, "uploadMode": "chunked"}))
 
 @api_router.post("/posts/{post_id}/repost", response_model=Post)
 async def repost_post(
@@ -4973,6 +6767,9 @@ async def repost_post(
         "profile_picture": user.get("profile_picture"),
         "text": repost_text,
         "image": source_post.get("image"),
+        "video": source_post.get("video"),
+        "poll": source_post.get("poll"),
+        "reaction_counts": {},
         "hashtags": list(source_post.get("hashtags") or []),
         "mentions": list(source_post.get("mentions") or []),
         "repost_post_id": post_id,
@@ -5047,10 +6844,30 @@ async def get_feed(
         }).to_list(length=None)
         
         liked_post_ids = {like["post_id"] for like in likes}
+        reactions = await db.post_reactions.find({
+            "post_id": {"$in": post_ids},
+            "user_id": current_user["user_id"],
+        }, {"_id": 0, "post_id": 1, "reaction_type": 1}).to_list(length=None)
+        user_reactions = {reaction["post_id"]: reaction["reaction_type"] for reaction in reactions}
+        poll_votes = await db.poll_votes.find({
+            "post_id": {"$in": post_ids},
+            "user_id": current_user["user_id"],
+        }, {"_id": 0, "post_id": 1, "option_id": 1}).to_list(length=None)
+        user_poll_votes = {vote["post_id"]: vote["option_id"] for vote in poll_votes}
+        bookmarks = await db.bookmarks.find({
+            "post_id": {"$in": post_ids},
+            "user_id": current_user["user_id"],
+        }, {"_id": 0, "post_id": 1}).to_list(length=None)
+        bookmarked_post_ids = {bookmark["post_id"] for bookmark in bookmarks}
         
         # Add is_liked flag
         for post in posts:
             post["is_liked"] = post["post_id"] in liked_post_ids
+            post["is_bookmarked"] = post["post_id"] in bookmarked_post_ids
+            post["user_reaction"] = user_reactions.get(post["post_id"])
+            poll = post.get("poll")
+            if isinstance(poll, dict):
+                poll["user_vote"] = user_poll_votes.get(post["post_id"]) or poll.get("user_vote")
 
         comments = await db.comments.find(
             {"post_id": {"$in": post_ids}},
@@ -5126,11 +6943,18 @@ async def get_feed(
                 posts = [p for p in posts if p["user_id"] not in excluded_user_ids]
         post_ids = [p["post_id"] for p in posts]
         comments_by_post = get_sqlite_comments_for_posts(post_ids)
+        user_reactions = sqlite_get_user_reactions(post_ids, current_user["user_id"])
+        user_poll_votes = sqlite_get_user_poll_votes(post_ids, current_user["user_id"])
+        bookmarked_post_ids = sqlite_get_user_bookmarks(post_ids, current_user["user_id"])
         for post in posts:
             post["is_liked"] = False
+            post["is_bookmarked"] = post["post_id"] in bookmarked_post_ids
+            post["user_reaction"] = user_reactions.get(post["post_id"])
             post_comments = comments_by_post.get(post["post_id"], [])
             post["comments"] = post_comments
             post["comments_count"] = len(post_comments)
+        posts = [normalize_post_payload(post) for post in posts]
+        apply_user_poll_votes(posts, user_poll_votes)
         interest_keywords = sqlite_get_user_interest_keywords_merged(current_user["user_id"])
         followed_ids = sqlite_following_ids(current_user["user_id"])
         favorite_author_ids = sqlite_get_user_signal_author_ids(current_user["user_id"])
@@ -5161,6 +6985,101 @@ async def get_feed(
         enriched_posts.append(Post(**post))
     return enriched_posts
 
+@api_router.get("/media/posts", response_model=List[Post])
+async def get_media_posts(
+    skip: int = 0,
+    limit: int = 80,
+    authorization: Optional[str] = Header(None)
+):
+    """Get media stream posts, including live replay clips and recording exports."""
+    current_user = await get_current_user(authorization)
+    hide_nsfw = not is_user_adult(current_user)
+    safe_limit = max(1, min(limit, 200))
+
+    if db is not None:
+        media_clause: Dict[str, Any] = {
+            "$or": [
+                {"image": {"$nin": [None, ""]}},
+                {"video": {"$nin": [None, ""]}},
+                {"type": {"$in": ["video", "live_replay", "live_recording", "clip"]}},
+                {"source": "live_replay"},
+                {"source": "live_recording"},
+                {"is_clip": True},
+                {"text": {"$regex": r"(Live Replay|Tallenne:)", "$options": "i"}},
+            ]
+        }
+        filter_query: Dict[str, Any] = media_clause
+        if hide_nsfw:
+            filter_query = {"$and": [media_clause, {"is_nsfw": {"$ne": True}}]}
+
+        posts = await db.posts.find(filter_query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(safe_limit).to_list(length=safe_limit)
+        post_ids = [p["post_id"] for p in posts]
+        likes = await db.likes.find({
+            "post_id": {"$in": post_ids},
+            "user_id": current_user["user_id"],
+        }).to_list(length=None)
+        reactions = await db.post_reactions.find({
+            "post_id": {"$in": post_ids},
+            "user_id": current_user["user_id"],
+        }, {"_id": 0, "post_id": 1, "reaction_type": 1}).to_list(length=None)
+        poll_votes = await db.poll_votes.find({
+            "post_id": {"$in": post_ids},
+            "user_id": current_user["user_id"],
+        }, {"_id": 0, "post_id": 1, "option_id": 1}).to_list(length=None)
+        bookmarks = await db.bookmarks.find({
+            "post_id": {"$in": post_ids},
+            "user_id": current_user["user_id"],
+        }, {"_id": 0, "post_id": 1}).to_list(length=None)
+        comments = await db.comments.find(
+            {"post_id": {"$in": post_ids}},
+            {"_id": 0},
+        ).sort("created_at", 1).to_list(length=None)
+
+        liked_post_ids = {like["post_id"] for like in likes}
+        bookmarked_post_ids = {bookmark["post_id"] for bookmark in bookmarks}
+        user_reactions = {reaction["post_id"]: reaction["reaction_type"] for reaction in reactions}
+        user_poll_votes = {vote["post_id"]: vote["option_id"] for vote in poll_votes}
+        comments_by_post: Dict[str, List[Dict[str, Any]]] = {pid: [] for pid in post_ids}
+        for comment in comments:
+            comments_by_post.setdefault(comment["post_id"], []).append(comment)
+
+        for post in posts:
+            post["is_liked"] = post["post_id"] in liked_post_ids
+            post["is_bookmarked"] = post["post_id"] in bookmarked_post_ids
+            post["user_reaction"] = user_reactions.get(post["post_id"])
+            post_comments = comments_by_post.get(post["post_id"], [])
+            post["comments"] = post_comments
+            post["comments_count"] = len(post_comments)
+            poll = post.get("poll")
+            if isinstance(poll, dict):
+                poll["user_vote"] = user_poll_votes.get(post["post_id"]) or poll.get("user_vote")
+        posts = await annotate_posts_with_moderation_status(posts)
+    else:
+        posts = get_sqlite_media_posts(skip=skip, limit=safe_limit, hide_nsfw=hide_nsfw)
+        post_ids = [p["post_id"] for p in posts]
+        comments_by_post = get_sqlite_comments_for_posts(post_ids)
+        user_reactions = sqlite_get_user_reactions(post_ids, current_user["user_id"])
+        user_poll_votes = sqlite_get_user_poll_votes(post_ids, current_user["user_id"])
+        bookmarked_post_ids = sqlite_get_user_bookmarks(post_ids, current_user["user_id"])
+        for post in posts:
+            post["is_liked"] = False
+            post["is_bookmarked"] = post["post_id"] in bookmarked_post_ids
+            post["user_reaction"] = user_reactions.get(post["post_id"])
+            post_comments = comments_by_post.get(post["post_id"], [])
+            post["comments"] = post_comments
+            post["comments_count"] = len(post_comments)
+        posts = [normalize_post_payload(post) for post in posts]
+        apply_user_poll_votes(posts, user_poll_votes)
+        posts = await annotate_posts_with_moderation_status(posts)
+
+    enriched_posts = []
+    for post in posts:
+        post = normalize_post_payload(post)
+        presence = await get_user_presence_snapshot(str(post.get("user_id") or ""), str(post.get("username") or ""))
+        post["is_online"] = bool(presence.get("is_online"))
+        enriched_posts.append(Post(**post))
+    return enriched_posts
+
 @api_router.get("/posts/{post_id}", response_model=Post)
 async def get_post(
     post_id: str,
@@ -5174,19 +7093,309 @@ async def get_post(
             "post_id": post_id,
             "user_id": current_user["user_id"]
         })
+        reaction = await db.post_reactions.find_one({"post_id": post_id, "user_id": current_user["user_id"]}, {"_id": 0})
+        poll_vote = await db.poll_votes.find_one({"post_id": post_id, "user_id": current_user["user_id"]}, {"_id": 0})
+        bookmark = await db.bookmarks.find_one({"post_id": post_id, "user_id": current_user["user_id"]}, {"_id": 0})
     else:
         post = get_sqlite_post(post_id)
         like = None
+        reaction = None
+        poll_vote = None
+        bookmark = None
     
     if not post:
         raise HTTPException(status_code=404, detail="Post not found")
 
     post = normalize_post_payload(post)
+    if db is None:
+        post["user_reaction"] = sqlite_get_user_reactions([post_id], current_user["user_id"]).get(post_id)
+        post["is_bookmarked"] = post_id in sqlite_get_user_bookmarks([post_id], current_user["user_id"])
+        apply_user_poll_votes([post], sqlite_get_user_poll_votes([post_id], current_user["user_id"]))
+    else:
+        post["user_reaction"] = reaction.get("reaction_type") if reaction else None
+        post["is_bookmarked"] = bookmark is not None
+        if isinstance(post.get("poll"), dict) and poll_vote:
+            post["poll"]["user_vote"] = poll_vote.get("option_id")
     if not is_user_adult(current_user) and bool(post.get("is_nsfw")):
         raise HTTPException(status_code=403, detail="Content restricted")
     post["is_liked"] = like is not None
     post["is_online"] = bool((await get_user_presence_snapshot(str(post.get("user_id") or ""), str(post.get("username") or ""))).get("is_online"))
     return Post(**post)
+
+@api_router.post("/posts/{post_id}/video-analytics")
+async def track_video_analytics(
+    post_id: str,
+    analytics: VideoAnalyticsEvent,
+    authorization: str = Header(None),
+    request: Request = None,
+):
+    if request is not None:
+        await ensure_request_ip_not_blacklisted(request)
+    user = await get_current_user(authorization)
+    ensure_not_banned(user)
+    event_name = (analytics.event or "").strip().lower()
+    allowed_events = {"start", "25", "50", "75", "100", "complete", "replay"}
+    if event_name not in allowed_events:
+        raise HTTPException(status_code=400, detail="Unsupported video analytics event")
+    milestone_value = analytics.milestone
+    if milestone_value is None and event_name in {"25", "50", "75", "100"}:
+        milestone_value = int(event_name)
+    if event_name in {"100", "complete"}:
+        milestone_value = 100
+    completion_rate = max(0.0, min(100.0, float(milestone_value or 0)))
+    watch_time = max(0.0, float(analytics.current_time or 0))
+
+    if db is not None:
+        update_doc: Dict[str, Any] = {
+            "$max": {
+                "watch_time": watch_time,
+                "completion_rate": completion_rate,
+            }
+        }
+        increments: Dict[str, int] = {}
+        if event_name == "start":
+            increments["views"] = 1
+        if event_name in {"100", "complete", "replay"}:
+            increments["replay_count"] = 1
+        if increments:
+            update_doc["$inc"] = increments
+        result = await db.posts.update_one({"post_id": post_id}, update_doc)
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Post not found")
+        updated = await db.posts.find_one({"post_id": post_id}, {"_id": 0})
+        return normalize_post_payload(updated or {"post_id": post_id})
+
+    if REPOSITORY_ADAPTER is not None:
+        raise HTTPException(status_code=501, detail="Video analytics are not implemented for repository storage")
+
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT post_id, views, watch_time, completion_rate, replay_count FROM posts WHERE post_id = ?", (post_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Post not found")
+        next_views = int(row["views"] or 0) + (1 if event_name == "start" else 0)
+        next_replays = int(row["replay_count"] or 0) + (1 if event_name in {"100", "complete", "replay"} else 0)
+        next_watch_time = max(float(row["watch_time"] or 0), watch_time)
+        next_completion_rate = max(float(row["completion_rate"] or 0), completion_rate)
+        cursor.execute(
+            """
+            UPDATE posts
+            SET views = ?, watch_time = ?, completion_rate = ?, replay_count = ?
+            WHERE post_id = ?
+            """,
+            (next_views, next_watch_time, next_completion_rate, next_replays, post_id),
+        )
+        conn.commit()
+        return {
+            "post_id": post_id,
+            "views": next_views,
+            "watch_time": next_watch_time,
+            "completion_rate": next_completion_rate,
+            "replay_count": next_replays,
+        }
+
+
+@api_router.patch("/posts/{post_id}", response_model=Post)
+async def update_post(
+    post_id: str,
+    payload: PostUpdate,
+    authorization: str = Header(None),
+    request: Request = None,
+):
+    if request is not None:
+        await ensure_request_ip_not_blacklisted(request)
+    user = await get_current_user(authorization)
+    ensure_not_banned(user)
+    updates: Dict[str, Any] = {}
+    if payload.title is not None:
+        updates["title"] = payload.title.strip()[:160] or None
+    if payload.text is not None:
+        updates["text"] = payload.text.strip()[:5000]
+        updates["hashtags"] = extract_hashtags_from_text(updates["text"])
+        updates["mentions"] = extract_mentions_from_text(updates["text"])
+        updates["keywords"] = extract_post_keywords(updates["text"])
+    if payload.image is not None:
+        updates["image"] = payload.image.strip() or None
+        updates["thumbnailUrl"] = updates["image"]
+    if payload.thumbnailUrl is not None:
+        updates["thumbnailUrl"] = payload.thumbnailUrl.strip() or None
+        updates["image"] = updates["thumbnailUrl"]
+    if not updates:
+        raise HTTPException(status_code=400, detail="No post fields to update")
+
+    if db is not None:
+        existing = await db.posts.find_one({"post_id": post_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if existing.get("user_id") != user["user_id"]:
+            raise HTTPException(status_code=403, detail="You can only update your own posts")
+        await db.posts.update_one({"post_id": post_id}, {"$set": updates})
+        updated = await db.posts.find_one({"post_id": post_id}, {"_id": 0})
+        normalized = normalize_post_payload(updated or existing)
+        normalized["is_liked"] = False
+        normalized["is_bookmarked"] = False
+        return Post(**normalized)
+
+    if REPOSITORY_ADAPTER is not None:
+        raise HTTPException(status_code=501, detail="Post updates are not implemented for repository storage")
+
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT post_id, user_id FROM posts WHERE post_id = ?", (post_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if row["user_id"] != user["user_id"]:
+            raise HTTPException(status_code=403, detail="You can only update your own posts")
+        columns = []
+        values: List[Any] = []
+        for key, value in updates.items():
+            if key in {"thumbnailUrl"}:
+                continue
+            columns.append(f"{key} = ?")
+            if key in {"hashtags", "mentions", "keywords"}:
+                values.append(json.dumps(value))
+            else:
+                values.append(value)
+        values.append(post_id)
+        cursor.execute(f"UPDATE posts SET {', '.join(columns)} WHERE post_id = ?", values)
+        conn.commit()
+    updated = normalize_post_payload(get_sqlite_post(post_id) or {})
+    updated["is_liked"] = False
+    updated["is_bookmarked"] = False
+    return Post(**updated)
+
+
+@api_router.delete("/posts/{post_id}")
+async def delete_post(
+    post_id: str,
+    authorization: str = Header(None),
+    request: Request = None,
+):
+    if request is not None:
+        await ensure_request_ip_not_blacklisted(request)
+    user = await get_current_user(authorization)
+    ensure_not_banned(user)
+    if db is not None:
+        existing = await db.posts.find_one({"post_id": post_id}, {"_id": 0})
+        if not existing:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if existing.get("user_id") != user["user_id"]:
+            raise HTTPException(status_code=403, detail="You can only delete your own posts")
+        await db.posts.delete_one({"post_id": post_id})
+        await db.comments.delete_many({"post_id": post_id})
+        await db.likes.delete_many({"post_id": post_id})
+        await db.bookmarks.delete_many({"post_id": post_id})
+        await db.post_reactions.delete_many({"post_id": post_id})
+        await db.users.update_one({"user_id": user["user_id"]}, {"$inc": {"posts_count": -1}})
+        return {"deleted": True}
+
+    if REPOSITORY_ADAPTER is not None:
+        raise HTTPException(status_code=501, detail="Post deletion is not implemented for repository storage")
+
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT post_id, user_id FROM posts WHERE post_id = ?", (post_id,))
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Post not found")
+        if row["user_id"] != user["user_id"]:
+            raise HTTPException(status_code=403, detail="You can only delete your own posts")
+        cursor.execute("DELETE FROM posts WHERE post_id = ?", (post_id,))
+        cursor.execute("DELETE FROM comments WHERE post_id = ?", (post_id,))
+        cursor.execute("DELETE FROM likes WHERE post_id = ?", (post_id,))
+        cursor.execute("DELETE FROM bookmarks WHERE post_id = ?", (post_id,))
+        cursor.execute("DELETE FROM post_reactions WHERE post_id = ?", (post_id,))
+        cursor.execute("UPDATE users SET posts_count = CASE WHEN COALESCE(posts_count, 0) > 0 THEN posts_count - 1 ELSE 0 END WHERE user_id = ?", (user["user_id"],))
+        conn.commit()
+    with suppress(Exception):
+        for candidate in uploads_dir.glob(f"{post_id}*"):
+            candidate.unlink(missing_ok=True)
+    return {"deleted": True}
+
+@api_router.get("/users/me/bookmarks", response_model=List[Post])
+async def get_bookmarked_posts(
+    skip: int = 0,
+    limit: int = 20,
+    authorization: Optional[str] = Header(None),
+):
+    current_user = await get_current_user(authorization)
+    safe_limit = max(1, min(limit, 500))
+    hide_nsfw = not is_user_adult(current_user)
+    if db is not None:
+        cursor = db.bookmarks.find({"user_id": current_user["user_id"]}, {"_id": 0}).sort("created_at", -1).skip(skip).limit(safe_limit)
+        bookmarks = await cursor.to_list(length=safe_limit)
+        post_ids = [bookmark["post_id"] for bookmark in bookmarks]
+        posts = []
+        if post_ids:
+            filter_query: Dict[str, Any] = {"post_id": {"$in": post_ids}}
+            if hide_nsfw:
+                filter_query["is_nsfw"] = {"$ne": True}
+            posts = await db.posts.find(filter_query, {"_id": 0}).to_list(length=safe_limit)
+            post_order = {post_id: index for index, post_id in enumerate(post_ids)}
+            posts.sort(key=lambda post: post_order.get(post.get("post_id"), 9999))
+    else:
+        posts = sqlite_get_bookmarked_posts(current_user["user_id"], skip=skip, limit=safe_limit, hide_nsfw=hide_nsfw)
+    post_ids = [str(post.get("post_id")) for post in posts]
+    comments_by_post = get_sqlite_comments_for_posts(post_ids) if db is None else {}
+    if db is not None and post_ids:
+        comments = await db.comments.find({"post_id": {"$in": post_ids}}, {"_id": 0}).sort("created_at", 1).to_list(length=None)
+        comments_by_post = {pid: [] for pid in post_ids}
+        for comment in comments:
+            comments_by_post.setdefault(comment["post_id"], []).append(comment)
+    user_reactions = sqlite_get_user_reactions(post_ids, current_user["user_id"]) if db is None else {}
+    user_poll_votes = sqlite_get_user_poll_votes(post_ids, current_user["user_id"]) if db is None else {}
+    if db is not None and post_ids:
+        reactions = await db.post_reactions.find({"post_id": {"$in": post_ids}, "user_id": current_user["user_id"]}, {"_id": 0, "post_id": 1, "reaction_type": 1}).to_list(length=None)
+        user_reactions = {reaction["post_id"]: reaction["reaction_type"] for reaction in reactions}
+        votes = await db.poll_votes.find({"post_id": {"$in": post_ids}, "user_id": current_user["user_id"]}, {"_id": 0, "post_id": 1, "option_id": 1}).to_list(length=None)
+        user_poll_votes = {vote["post_id"]: vote["option_id"] for vote in votes}
+    enriched: List[Post] = []
+    for post in posts:
+        post = normalize_post_payload(post)
+        post["is_liked"] = False
+        post["is_bookmarked"] = True
+        post["user_reaction"] = user_reactions.get(str(post.get("post_id")))
+        post["comments"] = comments_by_post.get(str(post.get("post_id")), [])
+        post["comments_count"] = len(post["comments"])
+        apply_user_poll_votes([post], user_poll_votes)
+        post["is_online"] = bool((await get_user_presence_snapshot(str(post.get("user_id") or ""), str(post.get("username") or ""))).get("is_online"))
+        enriched.append(Post(**post))
+    return enriched
+
+@api_router.post("/posts/{post_id}/bookmark")
+async def toggle_post_bookmark(
+    post_id: str,
+    authorization: Optional[str] = Header(None),
+):
+    user = await get_current_user(authorization)
+    if db is not None:
+        post = await db.posts.find_one({"post_id": post_id}, {"_id": 0, "post_id": 1})
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        existing = await db.bookmarks.find_one({"post_id": post_id, "user_id": user["user_id"]}, {"_id": 0})
+        if existing:
+            await db.bookmarks.delete_one({"post_id": post_id, "user_id": user["user_id"]})
+            return {"is_bookmarked": False}
+        await db.bookmarks.insert_one({
+            "bookmark_id": f"bookmark_{uuid.uuid4().hex[:12]}",
+            "post_id": post_id,
+            "user_id": user["user_id"],
+            "created_at": utc_now(),
+        })
+        return {"is_bookmarked": True}
+    return sqlite_toggle_bookmark(post_id, user["user_id"])
+
+@api_router.post("/bookmarks/toggle")
+async def toggle_bookmark_service(
+    payload: BookmarkToggleCreate,
+    authorization: Optional[str] = Header(None),
+):
+    post_id = str(payload.post_id or "").strip()
+    if not post_id:
+        raise HTTPException(status_code=400, detail="post_id is required")
+    return await toggle_post_bookmark(post_id, authorization)
 
 # =======================
 # LIKE ENDPOINTS
@@ -5263,6 +7472,95 @@ async def like_post(
                 post_id=post_id,
             )
         return {"message": "Like toggled", **result}
+
+@api_router.post("/posts/{post_id}/reaction")
+async def react_to_post(
+    post_id: str,
+    payload: ReactionCreate,
+    authorization: Optional[str] = Header(None),
+):
+    user = await get_current_user(authorization)
+    reaction_type = payload.reaction_type
+    allowed = {"fire", "idea", "rocket"}
+    if reaction_type not in allowed:
+        raise HTTPException(status_code=400, detail="Unsupported reaction")
+    if db is not None:
+        post = await db.posts.find_one({"post_id": post_id}, {"_id": 0, "reaction_counts": 1})
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        existing = await db.post_reactions.find_one({"post_id": post_id, "user_id": user["user_id"]}, {"_id": 0})
+        previous = existing.get("reaction_type") if existing else None
+        if existing:
+            await db.post_reactions.update_one(
+                {"post_id": post_id, "user_id": user["user_id"]},
+                {"$set": {"reaction_type": reaction_type, "created_at": utc_now()}},
+            )
+        else:
+            await db.post_reactions.insert_one({
+                "reaction_id": f"reaction_{uuid.uuid4().hex[:12]}",
+                "post_id": post_id,
+                "user_id": user["user_id"],
+                "reaction_type": reaction_type,
+                "created_at": utc_now(),
+            })
+        counts = post.get("reaction_counts") if isinstance(post.get("reaction_counts"), dict) else {}
+        counts = dict(counts or {})
+        if previous and previous != reaction_type:
+            counts[previous] = max(0, int(counts.get(previous, 0) or 0) - 1)
+        if previous != reaction_type:
+            counts[reaction_type] = int(counts.get(reaction_type, 0) or 0) + 1
+        await db.posts.update_one({"post_id": post_id}, {"$set": {"reaction_counts": counts}})
+        return {"reaction_type": reaction_type, "reaction_counts": counts}
+    return sqlite_set_post_reaction(post_id, user["user_id"], reaction_type)
+
+@api_router.post("/posts/{post_id}/poll/vote", response_model=Poll)
+async def vote_poll(
+    post_id: str,
+    payload: PollVoteCreate,
+    authorization: Optional[str] = Header(None),
+):
+    user = await get_current_user(authorization)
+    option_id = payload.option_id
+    if db is not None:
+        post = await db.posts.find_one({"post_id": post_id}, {"_id": 0, "poll": 1})
+        if not post:
+            raise HTTPException(status_code=404, detail="Post not found")
+        poll = post.get("poll")
+        if not isinstance(poll, dict):
+            raise HTTPException(status_code=400, detail="Post has no poll")
+        valid_option_ids = {str(option.get("option_id")) for option in poll.get("options", []) if isinstance(option, dict)}
+        if option_id not in valid_option_ids:
+            raise HTTPException(status_code=400, detail="Invalid poll option")
+        existing = await db.poll_votes.find_one({"post_id": post_id, "user_id": user["user_id"]}, {"_id": 0})
+        previous_option = existing.get("option_id") if existing else None
+        if existing:
+            await db.poll_votes.update_one(
+                {"post_id": post_id, "user_id": user["user_id"]},
+                {"$set": {"option_id": option_id, "created_at": utc_now()}},
+            )
+        else:
+            await db.poll_votes.insert_one({
+                "vote_id": f"vote_{uuid.uuid4().hex[:12]}",
+                "post_id": post_id,
+                "user_id": user["user_id"],
+                "option_id": option_id,
+                "created_at": utc_now(),
+            })
+        for option in poll.get("options", []):
+            if not isinstance(option, dict):
+                continue
+            current_count = int(option.get("votes_count", 0) or 0)
+            if previous_option and option.get("option_id") == previous_option and previous_option != option_id:
+                current_count = max(0, current_count - 1)
+            if option.get("option_id") == option_id and previous_option != option_id:
+                current_count += 1
+            option["votes_count"] = current_count
+        poll["total_votes"] = sum(int(option.get("votes_count", 0) or 0) for option in poll.get("options", []) if isinstance(option, dict))
+        poll["user_vote"] = option_id
+        await db.posts.update_one({"post_id": post_id}, {"$set": {"poll": poll}})
+        return Poll(**poll)
+    poll = sqlite_vote_poll(post_id, user["user_id"], option_id)
+    return Poll(**poll)
 
 @api_router.delete("/posts/{post_id}/like")
 async def unlike_post(
@@ -5780,6 +8078,46 @@ async def create_report(
                 ),
             )
             conn.commit()
+    normalized_reason = report_doc["reason"].lower()
+    if report_data.target_type == "post" and normalized_reason in {"copyright", "music_copyright", "copyright_music"}:
+        post = await db.posts.find_one({"post_id": report_data.target_id}, {"_id": 0}) if db is not None else get_sqlite_post(report_data.target_id)
+        if post:
+            post_author_id = str(post.get("user_id") or "")
+            queue_item = {
+                "moderation_id": f"mod_{uuid.uuid4().hex[:12]}",
+                "target_type": "post",
+                "target_id": report_data.target_id,
+                "user_id": post_author_id,
+                "score": 45,
+                "status": "pending",
+                "reason": "copyright/music report",
+                "created_at": utc_now() if db is not None else utc_iso_now(),
+                "text": str(post.get("text") or "")[:1000],
+                "post_id": report_data.target_id,
+            }
+            if db is not None:
+                await db.moderation_queue.insert_one(queue_item)
+                await db.posts.update_one(
+                    {"post_id": report_data.target_id},
+                    {"$set": {"copyright_status": "reported", "distribution_limited": True}},
+                )
+            else:
+                sqlite_queue_moderation_item(queue_item)
+                with get_sqlite_connection() as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE posts SET copyright_status = ?, distribution_limited = 1 WHERE post_id = ?",
+                        ("reported", report_data.target_id),
+                    )
+                    conn.commit()
+            if post_author_id:
+                await adjust_user_trust_score(post_author_id, -8, "copyright_report")
+            push_audit_log(
+                "copyright_report_queued",
+                report_data.target_id,
+                actor_id=user["user_id"],
+                details=json.dumps({"reason": normalized_reason, "author_id": post_author_id}),
+            )
     return {"message": "Report submitted"}
 
 
@@ -6404,7 +8742,7 @@ async def get_moderation_queue(authorization: Optional[str] = Header(None)):
             item["author_presence"] = await get_user_presence_snapshot(str(item.get("user_id") or ""), str(item.get("username") or ""))
             post_id = str(item.get("post_id") or "")
             if post_id:
-                item["post_summary"] = sqlite_get_post_summary(post_id)
+                item["post_summary"] = await get_post_summary_for_moderation(post_id)
         return queue
     repo_queue = repository_get_moderation_queue()
     if repo_queue is not None:
@@ -6412,15 +8750,128 @@ async def get_moderation_queue(authorization: Optional[str] = Header(None)):
             item["author_presence"] = await get_user_presence_snapshot(str(item.get("user_id") or ""), str(item.get("username") or ""))
             post_id = str(item.get("post_id") or "")
             if post_id:
-                item["post_summary"] = sqlite_get_post_summary(post_id)
+                item["post_summary"] = await get_post_summary_for_moderation(post_id)
         return repo_queue
     queue = sqlite_get_moderation_queue()
     for item in queue:
         item["author_presence"] = await get_user_presence_snapshot(str(item.get("user_id") or ""), str(item.get("username") or ""))
         post_id = str(item.get("post_id") or "")
         if post_id:
-            item["post_summary"] = sqlite_get_post_summary(post_id)
+            item["post_summary"] = await get_post_summary_for_moderation(post_id)
     return queue
+
+
+async def apply_moderation_decision_to_target(
+    item: Dict[str, Any],
+    decision: ModerationDecision,
+    moderator: Dict[str, Any],
+) -> Dict[str, Any]:
+    action = decision.action.lower().strip()
+    target_type = str(item.get("target_type") or "")
+    post_id = str(item.get("target_id") or item.get("post_id") or "") if target_type == "post" else str(item.get("post_id") or "")
+    author_id = str(item.get("user_id") or "")
+    result: Dict[str, Any] = {"post_id": post_id, "author_id": author_id, "target_updated": False}
+    reason = decision.reviewed_reason or decision.reason or item.get("reason") or action
+
+    if target_type != "post" or not post_id:
+        return result
+
+    trust_delta_by_action = {
+        "approve": 2,
+        "clear": 2,
+        "dismiss": 0,
+        "warn": -4,
+        "warning": -4,
+        "limit": -5,
+        "mute": -5,
+        "restrict": -5,
+        "reject": -8,
+        "remove": -15,
+        "delete": -15,
+    }
+    notification_by_action = {
+        "approve": "moderation_content_approved",
+        "clear": "moderation_content_approved",
+        "warn": "moderation_warning",
+        "warning": "moderation_warning",
+        "limit": "moderation_distribution_limited",
+        "mute": "moderation_distribution_limited",
+        "restrict": "moderation_distribution_limited",
+        "reject": "moderation_content_removed",
+        "remove": "moderation_content_removed",
+        "delete": "moderation_content_removed",
+    }
+
+    if action in {"approve", "clear", "dismiss"}:
+        update = {
+            "copyright_status": "clear",
+            "music_risk": "none",
+            "music_warning_acknowledged": True,
+            "distribution_limited": False,
+        }
+    elif action in {"warn", "warning"}:
+        update = {
+            "copyright_status": "warning",
+            "music_warning_acknowledged": False,
+            "distribution_limited": False,
+        }
+    elif action in {"limit", "mute", "restrict"}:
+        update = {
+            "copyright_status": "audio_restricted",
+            "music_warning_acknowledged": False,
+            "distribution_limited": True,
+        }
+    elif action in {"reject", "remove", "delete"}:
+        update = {
+            "copyright_status": "removed",
+            "music_warning_acknowledged": False,
+            "distribution_limited": True,
+            "visibility": "hidden",
+            "status": "removed",
+        }
+    else:
+        update = {}
+
+    if update:
+        if db is not None:
+            post = await db.posts.find_one({"post_id": post_id}, {"_id": 0, "user_id": 1})
+            if post:
+                author_id = author_id or str(post.get("user_id") or "")
+                await db.posts.update_one({"post_id": post_id}, {"$set": update})
+                result["target_updated"] = True
+        else:
+            set_clause = ", ".join([f"{column} = ?" for column in update])
+            values = [int(value) if isinstance(value, bool) else value for value in update.values()]
+            with get_sqlite_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT user_id FROM posts WHERE post_id = ?", (post_id,))
+                row = cursor.fetchone()
+                if row:
+                    author_id = author_id or str(row["user_id"] or "")
+                    cursor.execute(f"UPDATE posts SET {set_clause} WHERE post_id = ?", (*values, post_id))
+                    conn.commit()
+                    result["target_updated"] = cursor.rowcount > 0
+
+    trust_delta = trust_delta_by_action.get(action, 0)
+    if author_id and trust_delta:
+        result["trust_score"] = await adjust_user_trust_score(author_id, trust_delta, f"moderation_{action}")
+    if author_id and action in notification_by_action:
+        await create_system_notification(author_id, notification_by_action[action], post_id=post_id)
+
+    push_audit_log(
+        "moderation_target_action_applied",
+        post_id or str(item.get("target_id") or ""),
+        actor_id=moderator["user_id"],
+        details=json.dumps({
+            "action": action,
+            "reason": reason,
+            "author_id": author_id,
+            "target_updated": result["target_updated"],
+            "trust_delta": trust_delta,
+        }),
+    )
+    result["author_id"] = author_id
+    return result
 
 
 @api_router.post("/admin/moderation-queue/{moderation_id}/action")
@@ -6431,8 +8882,13 @@ async def resolve_moderation_queue_item(
 ):
     user = await get_current_user(authorization)
     ensure_moderator_access(user)
-    next_status = "approved" if decision.action.lower() == "approve" else "rejected" if decision.action.lower() in {"reject", "dismiss"} else "resolved"
+    action = decision.action.lower().strip()
+    next_status = "approved" if action in {"approve", "clear"} else "rejected" if action in {"reject", "remove", "delete"} else "resolved"
     if db is not None:
+        item = await db.moderation_queue.find_one({"moderation_id": moderation_id}, {"_id": 0})
+        if not item:
+            raise HTTPException(status_code=404, detail="Moderation item not found")
+        target_result = await apply_moderation_decision_to_target(item, decision, user)
         result = await db.moderation_queue.update_one(
             {"moderation_id": moderation_id},
             {"$set": {"status": next_status, "reviewed_at": utc_now(), "reviewed_by": user["user_id"], "reviewed_reason": decision.reviewed_reason or decision.reason, "reviewed_reason_tags": decision.reason_tags, "reviewed_reason_custom": decision.reason_custom}},
@@ -6449,10 +8905,22 @@ async def resolve_moderation_queue_item(
                 "reviewed_reason": decision.reviewed_reason or decision.reason,
                 "reason_tags": decision.reason_tags,
                 "reason_custom": decision.reason_custom,
+                "target_result": target_result,
                 "storage": "mongodb",
             }),
         )
-        return {"moderation_id": moderation_id, "status": next_status}
+        return {"moderation_id": moderation_id, "status": next_status, "target_result": target_result}
+    with get_sqlite_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT moderation_id, target_type, target_id, user_id, score, status, reason, created_at, text, post_id FROM moderation_queue WHERE moderation_id = ?",
+            (moderation_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Moderation item not found")
+        item = dict(row)
+    target_result = await apply_moderation_decision_to_target(item, decision, user)
     with get_sqlite_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(
@@ -6473,10 +8941,11 @@ async def resolve_moderation_queue_item(
             "reviewed_reason": decision.reviewed_reason or decision.reason,
             "reason_tags": decision.reason_tags,
             "reason_custom": decision.reason_custom,
+            "target_result": target_result,
             "storage": "sqlite",
         }),
     )
-    return {"moderation_id": moderation_id, "status": next_status}
+    return {"moderation_id": moderation_id, "status": next_status, "target_result": target_result}
 
 
 @api_router.get("/admin/moderation-history")
@@ -6488,21 +8957,9 @@ async def get_moderation_history(authorization: Optional[str] = Header(None)):
             {"status": {"$ne": "pending"}},
             {"_id": 0},
         ).sort("created_at", -1).to_list(length=100)
-        post_ids = [item.get("post_id") for item in history if item.get("post_id")]
-        post_summaries: Dict[str, Dict[str, Any]] = {}
-        if post_ids:
-          posts = await db.posts.find({"post_id": {"$in": post_ids}}, {"_id": 0, "post_id": 1, "username": 1, "text": 1}).to_list(length=None)
-          post_summaries = {
-              post["post_id"]: {
-                  "post_id": post["post_id"],
-                  "username": post.get("username"),
-                  "text": str(post.get("text", "") or "")[:160],
-              }
-              for post in posts
-          }
         enriched_history = []
         for item in history:
-            post_summary = post_summaries.get(item.get("post_id"))
+            post_summary = await get_post_summary_for_moderation(str(item.get("post_id") or ""))
             if post_summary:
                 item["post_summary"] = post_summary
             enriched_history.append(item)
@@ -6512,12 +8969,12 @@ async def get_moderation_history(authorization: Optional[str] = Header(None)):
         history = [item for item in repo_queue if str(item.get("status", "")).lower() != "pending"]
         for item in history:
             if item.get("post_id"):
-                item["post_summary"] = sqlite_get_post_summary(str(item["post_id"]))
+                item["post_summary"] = await get_post_summary_for_moderation(str(item["post_id"]))
         return history
     history = sqlite_get_moderation_history()
     for item in history:
         if item.get("post_id"):
-            item["post_summary"] = sqlite_get_post_summary(str(item["post_id"]))
+            item["post_summary"] = await get_post_summary_for_moderation(str(item["post_id"]))
     return history
 
 
@@ -6549,6 +9006,33 @@ async def update_user_role(
         details=json.dumps({"role": role}),
     )
     return {"message": "Role updated", "role": role}
+
+
+@api_router.put("/admin/users/{target_user_id}/trust-score")
+async def update_user_trust_score_admin(
+    target_user_id: str,
+    payload: TrustScoreUpdate,
+    authorization: Optional[str] = Header(None),
+):
+    user = await get_current_user(authorization)
+    ensure_moderator_access(user)
+    if db is not None:
+        existing = await db.users.find_one({"user_id": target_user_id}, {"_id": 0, "user_id": 1})
+        if not existing:
+            raise HTTPException(status_code=404, detail="User not found")
+    else:
+        existing = get_sqlite_user_by_id(target_user_id)
+        if not existing:
+            raise HTTPException(status_code=404, detail="User not found")
+    next_score = await adjust_user_trust_score(target_user_id, payload.delta, payload.reason or "admin_adjustment")
+    await create_system_notification(target_user_id, "moderation_trust_score_updated")
+    push_audit_log(
+        "trust_score_admin_adjusted",
+        target_user_id,
+        actor_id=user["user_id"],
+        details=json.dumps({"delta": payload.delta, "reason": payload.reason, "score": next_score}),
+    )
+    return {"user_id": target_user_id, "trust_score": next_score}
 
 
 @api_router.delete("/admin/users/{target_user_id}")
@@ -6638,6 +9122,95 @@ async def get_moderation_settings(authorization: Optional[str] = Header(None)):
     return sqlite_get_moderation_settings()
 
 
+def build_moderation_analytics_payload(items: List[Dict[str, Any]]) -> Dict[str, Any]:
+    now = utc_now()
+    today = now.date()
+    by_status: Dict[str, int] = {}
+    by_reason: Dict[str, int] = {}
+    user_counts: Dict[str, Dict[str, Any]] = {}
+    copyright_today = 0
+    music_today = 0
+    trust_events_today = 0
+
+    for item in items:
+        status = str(item.get("status") or "unknown").lower()
+        reason = str(item.get("reviewed_reason") or item.get("reason") or "unknown").lower()
+        user_id = str(item.get("user_id") or "")
+        created = parse_datetime_or_none(item.get("created_at"))
+        reviewed = parse_datetime_or_none(item.get("reviewed_at"))
+        event_date = (reviewed or created or now).date()
+        by_status[status] = by_status.get(status, 0) + 1
+        by_reason[reason] = by_reason.get(reason, 0) + 1
+        if "copyright" in reason and event_date == today:
+            copyright_today += 1
+        if "music" in reason and event_date == today:
+            music_today += 1
+        if status in {"rejected", "resolved"} and any(token in reason for token in ("warning", "limit", "restrict", "remove", "copyright", "music")) and event_date == today:
+            trust_events_today += 1
+        if user_id:
+            bucket = user_counts.setdefault(user_id, {"user_id": user_id, "count": 0, "latest_reason": reason, "latest_at": None})
+            bucket["count"] += 1
+            latest_raw = item.get("reviewed_at") or item.get("created_at")
+            if latest_raw and (not bucket["latest_at"] or str(latest_raw) > str(bucket["latest_at"])):
+                bucket["latest_at"] = latest_raw
+                bucket["latest_reason"] = reason
+
+    pending_items = [item for item in items if str(item.get("status") or "").lower() in {"pending", "queued"}]
+    priority_queue = sorted(
+        pending_items,
+        key=lambda item: (int(item.get("score") or 0), str(item.get("created_at") or "")),
+        reverse=True,
+    )[:8]
+    repeat_offenders = sorted(
+        [value for value in user_counts.values() if int(value.get("count") or 0) >= 2],
+        key=lambda value: int(value.get("count") or 0),
+        reverse=True,
+    )[:8]
+
+    return {
+        "generated_at": now.isoformat(),
+        "total_items": len(items),
+        "pending_count": len(pending_items),
+        "reviewed_count": len(items) - len(pending_items),
+        "copyright_reports_today": copyright_today,
+        "music_reports_today": music_today,
+        "trust_events_today": trust_events_today,
+        "by_status": by_status,
+        "by_reason": by_reason,
+        "repeat_offenders": repeat_offenders,
+        "priority_queue": [
+            {
+                "moderation_id": item.get("moderation_id"),
+                "target_type": item.get("target_type"),
+                "target_id": item.get("target_id"),
+                "post_id": item.get("post_id"),
+                "user_id": item.get("user_id"),
+                "score": item.get("score"),
+                "status": item.get("status"),
+                "reason": item.get("reason"),
+                "text": item.get("text"),
+                "created_at": item.get("created_at"),
+            }
+            for item in priority_queue
+        ],
+    }
+
+
+@api_router.get("/admin/moderation/analytics")
+async def get_moderation_analytics(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    ensure_moderator_access(user)
+    if db is not None:
+        items = await db.moderation_queue.find({}, {"_id": 0}).sort("created_at", -1).to_list(length=1000)
+        return build_moderation_analytics_payload(items)
+    repo_queue = repository_get_moderation_queue(limit=1000)
+    if repo_queue is not None:
+        return build_moderation_analytics_payload(repo_queue)
+    items = sqlite_get_moderation_queue(limit=1000) + sqlite_get_moderation_history(limit=1000)
+    deduped = {str(item.get("moderation_id")): item for item in items if item.get("moderation_id")}
+    return build_moderation_analytics_payload(list(deduped.values()))
+
+
 @api_router.put("/admin/moderation/settings")
 async def update_moderation_settings(payload: ModerationSettings, authorization: Optional[str] = Header(None)):
     user = await get_current_user(authorization)
@@ -6665,6 +9238,31 @@ async def list_ad_campaigns(authorization: Optional[str] = Header(None)):
         rows = await db.ad_campaigns.find({}, {"_id": 0}).sort("created_at", -1).to_list(length=100)
         return rows
     return sqlite_list_ad_campaigns()
+
+
+@api_router.post("/admin/ads/campaign-asset")
+async def upload_ad_campaign_asset(
+    asset: UploadFile = File(...),
+    authorization: Optional[str] = Header(None),
+):
+    user = await get_current_user(authorization)
+    ensure_admin_access(user)
+    asset_id = f"campaign_{uuid.uuid4().hex[:12]}"
+    contents = await asset.read()
+    extension = _upload_extension(asset)
+    if extension in ALLOWED_IMAGE_EXTENSIONS:
+        asset_url = optimize_image_upload(contents, asset, asset_id)
+        asset_type = "image"
+    elif extension in ALLOWED_VIDEO_EXTENSIONS:
+        asset_url = transcode_video_upload(contents, asset, asset_id)
+        asset_type = "video"
+    else:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported campaign media type. Allowed: {', '.join(sorted(ALLOWED_IMAGE_EXTENSIONS | ALLOWED_VIDEO_EXTENSIONS))}",
+        )
+    push_audit_log("ad_campaign_asset_uploaded", asset_id, actor_id=user["user_id"], details=json.dumps({"asset_url": asset_url, "asset_type": asset_type}))
+    return {"asset_url": asset_url, "asset_type": asset_type}
 
 
 @api_router.post("/admin/ads/campaigns")
@@ -6777,6 +9375,116 @@ async def get_notifications_unread_count(authorization: Optional[str] = Header(N
         })
         return {"unread_count": int(count)}
     return {"unread_count": get_sqlite_unread_notifications_count(user["user_id"])}
+
+
+@api_router.get("/growth/achievements")
+async def get_growth_achievements(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    posts = await load_growth_posts(limit=500)
+    comments_made = await count_user_comments_made(user["user_id"])
+    stats = compute_creator_stats_from_posts(user, posts, comments_made=comments_made)
+    achievements = compute_achievements_from_creator_stats(stats)
+    return {
+        "user": {"user_id": user["user_id"], "username": user["username"]},
+        "creator_level": {key: stats[key] for key in ["level", "name", "score", "next_score", "progress"]},
+        "achievements": achievements,
+        "unlocked_count": sum(1 for item in achievements if item["unlocked"]),
+        "total_count": len(achievements),
+    }
+
+
+@api_router.get("/growth/creator-level")
+async def get_growth_creator_level(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    posts = await load_growth_posts(limit=500)
+    comments_made = await count_user_comments_made(user["user_id"])
+    stats = compute_creator_stats_from_posts(user, posts, comments_made=comments_made)
+    return stats
+
+
+@api_router.get("/growth/daily-trends")
+async def get_growth_daily_trends(limit: int = 8, authorization: Optional[str] = Header(None)):
+    await get_current_user(authorization)
+    posts = await load_growth_posts(limit=500)
+    trends = compute_daily_trends_from_posts(posts, limit=max(1, min(limit, 20)))
+    return trends
+
+
+@api_router.get("/live/breaking")
+async def get_breaking_live(authorization: Optional[str] = Header(None)):
+    await get_current_user(authorization)
+    streams = sorted(get_active_live_streams(), key=lambda item: (-float(item.get("breakingScore") or 0), -int(item.get("count") or 0)))
+    return {
+        "generated_at": utc_now().isoformat(),
+        "streams": streams,
+        "top": streams[0] if streams else None,
+    }
+
+
+@api_router.get("/discovery/surprise-me")
+async def get_surprise_me(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    active_streams = sorted(get_active_live_streams(), key=lambda item: (-float(item.get("breakingScore") or 0), -int(item.get("count") or 0)))
+    if active_streams:
+        stream = active_streams[0]
+        return {
+            "type": "live",
+            "title": f"Breaking Live: {stream.get('topic') or '#YOSLA'}",
+            "description": f"@{stream.get('username') or 'live'} on juuri nyt lähetyksessä.",
+            "target": f"/live?roomId={stream.get('roomId')}&topic={stream.get('topic') or '#YOSLA'}",
+            "payload": stream,
+        }
+    posts = await load_growth_posts(limit=300)
+    trends = compute_daily_trends_from_posts(posts, limit=6)
+    if trends["posts"]:
+        post = random.choice(trends["posts"][: min(3, len(trends["posts"]))])
+        return {
+            "type": "post",
+            "title": post.get("title") or "YOSLA trendi",
+            "description": f"Yllättävä nosto sinulle, @{user.get('username')}.",
+            "target": f"/posts/{post.get('post_id')}",
+            "payload": post,
+        }
+    local = build_local_yosla_payload(user, posts, limit=5)
+    community = local["communities"][0] if local["communities"] else {"name": "Suomi", "tag": "#suomi"}
+    return {
+        "type": "community",
+        "title": f"Local YOSLA: {community.get('tag')}",
+        "description": community.get("description") or "Löydä paikallinen keskustelu.",
+        "target": f"/communities/{community.get('name')}",
+        "payload": community,
+    }
+
+
+@api_router.get("/discovery/local-yosla")
+async def get_local_yosla(limit: int = 8, authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    posts = await load_growth_posts(limit=500)
+    return build_local_yosla_payload(user, posts, limit=max(1, min(limit, 20)))
+
+
+@api_router.get("/admin/growth/overview")
+async def get_admin_growth_overview(authorization: Optional[str] = Header(None)):
+    user = await get_current_user(authorization)
+    ensure_admin_access(user)
+    posts = await load_growth_posts(limit=800)
+    users = await load_growth_users(limit=200)
+    levels = []
+    for raw_user in users:
+        comments_made = await count_user_comments_made(str(raw_user.get("user_id") or ""))
+        stats = compute_creator_stats_from_posts(raw_user, posts, comments_made=comments_made)
+        levels.append(stats)
+    levels.sort(key=lambda item: (-float(item.get("score") or 0), str(item.get("username") or "")))
+    trends = compute_daily_trends_from_posts(posts, limit=10)
+    return {
+        "generated_at": utc_now().isoformat(),
+        "daily_trends": trends,
+        "creator_levels": levels[:20],
+        "moderation": {
+            "trend_posts_reviewable": sum(1 for post in trends["posts"] if float(post.get("score") or 0) >= 50),
+            "note": "Review high-score trends for safety, spam and policy fit before featuring.",
+        },
+    }
 
 
 @api_router.get("/explore", response_model=ExploreDirectoryResponse)
@@ -7325,6 +10033,7 @@ async def create_indexes():
                         "username": account["username"],
                         "profile_picture": None,
                         "bio": None,
+                        "relationship_status": "private",
                         "followers_count": 0,
                         "following_count": 0,
                         "posts_count": 0,
@@ -7355,6 +10064,7 @@ async def create_indexes():
                         username TEXT UNIQUE,
                         profile_picture TEXT,
                         bio TEXT,
+                        relationship_status TEXT DEFAULT 'private',
                         followers_count INTEGER DEFAULT 0,
                         following_count INTEGER DEFAULT 0,
                         posts_count INTEGER DEFAULT 0,
@@ -7362,7 +10072,9 @@ async def create_indexes():
                         date_of_birth TEXT,
                         age_verified_at TEXT,
                         role TEXT DEFAULT 'User',
-                        banned_until TEXT
+                        banned_until TEXT,
+                        trust_score INTEGER DEFAULT 100,
+                        trust_recovery_last_at TEXT
                     )
                     ''')
                     cur.execute('''
@@ -7373,9 +10085,27 @@ async def create_indexes():
                         profile_picture TEXT,
                         text TEXT,
                         image TEXT,
+                        video TEXT,
+                        title TEXT,
+                        duration INTEGER,
+                        visibility TEXT DEFAULT 'public',
+                        type TEXT,
+                        is_clip INTEGER DEFAULT 0,
+                        source TEXT,
+                        status TEXT DEFAULT 'ready',
+                        poll TEXT,
+                        reaction_counts TEXT DEFAULT '{}',
                         is_nsfw INTEGER DEFAULT 0,
                         likes_count INTEGER DEFAULT 0,
                         comments_count INTEGER DEFAULT 0,
+                        views INTEGER DEFAULT 0,
+                        watch_time REAL DEFAULT 0,
+                        completion_rate REAL DEFAULT 0,
+                        replay_count INTEGER DEFAULT 0,
+                        copyright_status TEXT DEFAULT 'clear',
+                        music_risk TEXT DEFAULT 'none',
+                        music_warning_acknowledged INTEGER DEFAULT 0,
+                        distribution_limited INTEGER DEFAULT 0,
                         created_at TEXT,
                         keywords TEXT DEFAULT '[]'
                     )
@@ -7386,6 +10116,35 @@ async def create_indexes():
                         post_id TEXT,
                         user_id TEXT,
                         created_at TEXT
+                    )
+                    ''')
+                    cur.execute('''
+                    CREATE TABLE IF NOT EXISTS post_reactions (
+                        reaction_id TEXT PRIMARY KEY,
+                        post_id TEXT,
+                        user_id TEXT,
+                        reaction_type TEXT,
+                        created_at TEXT,
+                        UNIQUE(post_id, user_id)
+                    )
+                    ''')
+                    cur.execute('''
+                    CREATE TABLE IF NOT EXISTS poll_votes (
+                        vote_id TEXT PRIMARY KEY,
+                        post_id TEXT,
+                        user_id TEXT,
+                        option_id TEXT,
+                        created_at TEXT,
+                        UNIQUE(post_id, user_id)
+                    )
+                    ''')
+                    cur.execute('''
+                    CREATE TABLE IF NOT EXISTS bookmarks (
+                        bookmark_id TEXT PRIMARY KEY,
+                        post_id TEXT,
+                        user_id TEXT,
+                        created_at TEXT,
+                        UNIQUE(post_id, user_id)
                     )
                     ''')
                     cur.execute('''
@@ -7466,6 +10225,18 @@ async def create_indexes():
                     for column_name, column_type in (("post_id", "TEXT"), ("reviewed_at", "TEXT"), ("reviewed_by", "TEXT"), ("reviewed_reason", "TEXT"), ("reviewed_reason_tags", "TEXT"), ("reviewed_reason_custom", "TEXT")):
                         try:
                             cur.execute(f"ALTER TABLE moderation_queue ADD COLUMN {column_name} {column_type}")
+                        except sqlite3.OperationalError:
+                            pass
+                    for table_name, column_name, column_type in (
+                        ("users", "trust_score", "INTEGER DEFAULT 100"),
+                        ("users", "trust_recovery_last_at", "TEXT"),
+                        ("posts", "copyright_status", "TEXT DEFAULT 'clear'"),
+                        ("posts", "music_risk", "TEXT DEFAULT 'none'"),
+                        ("posts", "music_warning_acknowledged", "INTEGER DEFAULT 0"),
+                        ("posts", "distribution_limited", "INTEGER DEFAULT 0"),
+                    ):
+                        try:
+                            cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
                         except sqlite3.OperationalError:
                             pass
                     cur.execute('''
@@ -7615,6 +10386,10 @@ async def create_indexes():
                     except Exception:
                         pass
                     try:
+                        cur.execute("ALTER TABLE users ADD COLUMN relationship_status TEXT DEFAULT 'private'")
+                    except Exception:
+                        pass
+                    try:
                         cur.execute("ALTER TABLE ad_campaigns ADD COLUMN currency TEXT DEFAULT 'EUR'")
                     except Exception:
                         pass
@@ -7687,6 +10462,34 @@ async def create_indexes():
                     except Exception:
                         pass
                     try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN type TEXT")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN is_clip INTEGER DEFAULT 0")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN source TEXT")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN title TEXT")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN duration INTEGER")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN visibility TEXT DEFAULT 'public'")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN status TEXT DEFAULT 'ready'")
+                    except Exception:
+                        pass
+                    try:
                         cur.execute("ALTER TABLE posts ADD COLUMN repost_post_id TEXT")
                     except Exception:
                         pass
@@ -7694,6 +10497,24 @@ async def create_indexes():
                         cur.execute("ALTER TABLE posts ADD COLUMN repost_count INTEGER DEFAULT 0")
                     except Exception:
                         pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN poll TEXT")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN reaction_counts TEXT DEFAULT '{}'")
+                    except Exception:
+                        pass
+                    for column_sql in (
+                        "ALTER TABLE posts ADD COLUMN views INTEGER DEFAULT 0",
+                        "ALTER TABLE posts ADD COLUMN watch_time REAL DEFAULT 0",
+                        "ALTER TABLE posts ADD COLUMN completion_rate REAL DEFAULT 0",
+                        "ALTER TABLE posts ADD COLUMN replay_count INTEGER DEFAULT 0",
+                    ):
+                        try:
+                            cur.execute(column_sql)
+                        except Exception:
+                            pass
                     try:
                         cur.execute("ALTER TABLE UserInteractions ADD COLUMN keywords TEXT DEFAULT '[]'")
                     except Exception:
@@ -7813,6 +10634,7 @@ async def create_indexes():
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_messages_recipient_is_read ON messages(recipient_user_id, is_read)")
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_user_presence_last_active ON user_presence(last_active_at DESC)")
                     cur.execute("CREATE INDEX IF NOT EXISTS idx_community_memberships_name ON community_memberships(community_name)")
+                    cur.execute("CREATE INDEX IF NOT EXISTS idx_bookmarks_user_created ON bookmarks(user_id, created_at DESC)")
 
                     # Check if test user exists
                     for account in DEMO_ACCOUNTS:
@@ -7823,8 +10645,8 @@ async def create_indexes():
                             hashed = hash_password(account["password"])
                             created_at = datetime.now(timezone.utc).isoformat()
                             cur.execute(
-                                "INSERT INTO users (user_id, email, password_hash, username, created_at, role, banned_until) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                                (user_id, account["email"], hashed, account["username"], created_at, account["role"], None)
+                                "INSERT INTO users (user_id, email, password_hash, username, relationship_status, created_at, role, banned_until) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                                (user_id, account["email"], hashed, account["username"], "private", created_at, account["role"], None)
                             )
                             conn.commit()
                             logger.info(
@@ -7851,7 +10673,14 @@ app.include_router(api_router)
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=["*"],
-    allow_methods=["*"],
+    allow_origins=[
+        "http://localhost:8081",
+        "http://localhost:8084",
+        "http://127.0.0.1:8081",
+        "http://127.0.0.1:8084",
+    ],
+    allow_origin_regex=r"^https://[a-zA-Z0-9-]+\.app\.github\.dev$",
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["Content-Length", "Content-Type"],
 )
