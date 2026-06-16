@@ -239,8 +239,12 @@ export default function MediaScreen() {
                 !postVideo && variant === 2 && styles.mediaShort,
               ];
               return (
-                <TouchableOpacity key={post.post_id} style={[styles.card, isMobile && styles.mobileCard]} onPress={() => router.push(`/posts/${post.post_id}`)}>
-                  <View style={mediaFrameStyle}>
+                <TouchableOpacity
+                  key={post.post_id}
+                  style={[styles.card, isLiveReplay && styles.liveReplayCard, isMobile && styles.mobileCard]}
+                  onPress={() => router.push(`/posts/${post.post_id}`)}
+                >
+                  <View style={[mediaFrameStyle, isLiveReplay && styles.liveReplayFrame]}>
                     <View style={styles.cardActions}>
                       <PostActionsButton
                         post={post}
@@ -304,21 +308,53 @@ export default function MediaScreen() {
                       </View>
                     ) : null}
                     {isLiveReplay ? (
-                      <View style={styles.replayMetricsOverlay}>
-                        <Text style={styles.replayBadgeText}>🔴 LIVE REPLAY</Text>
+                      <View style={[styles.replayMetricsOverlay, isMobile && styles.mobileReplayMetricsOverlay]}>
+                        <View style={styles.replayOverlayHeader}>
+                          <View style={styles.replayBadge}>
+                            <View style={styles.replayLiveDot} />
+                            <Text style={styles.replayBadgeText}>LIVE REPLAY</Text>
+                          </View>
+                          <Text style={styles.replayDateText}>{formatReplayDate(post.created_at)}</Text>
+                        </View>
                         <Text style={styles.replayDurationText}>{formatReplayDuration(post.duration)}</Text>
-                        <Text style={styles.replayMetricText}>👁 {formatCompactCount(post.views)} · ❤️ {formatCompactCount(post.likes_count)} · 💬 {formatCompactCount(post.comments_count)}</Text>
+                        <View style={styles.replayMetricPillRow}>
+                          <View style={styles.replayMetricPill}>
+                            <Ionicons name="eye-outline" size={11} color="#bfdbfe" />
+                            <Text style={styles.replayMetricPillText}>{formatCompactCount(post.views)}</Text>
+                          </View>
+                          <View style={styles.replayMetricPill}>
+                            <Ionicons name="heart-outline" size={11} color="#fecaca" />
+                            <Text style={styles.replayMetricPillText}>{formatCompactCount(post.likes_count)}</Text>
+                          </View>
+                          <View style={styles.replayMetricPill}>
+                            <Ionicons name="chatbubble-outline" size={11} color="#bae6fd" />
+                            <Text style={styles.replayMetricPillText}>{formatCompactCount(post.comments_count)}</Text>
+                          </View>
+                          <View style={styles.replayMetricPill}>
+                            <Ionicons name="repeat-outline" size={11} color="#ddd6fe" />
+                            <Text style={styles.replayMetricPillText}>{formatCompactCount(post.replay_count)}</Text>
+                          </View>
+                        </View>
                       </View>
                     ) : null}
                   </View>
-                  <Text style={styles.cardText} numberOfLines={2}>{post.text || `@${post.username}`}</Text>
+                  {isLiveReplay ? (
+                    <View style={styles.liveReplayInfoRow}>
+                      <View style={styles.liveReplayCreatorBadge}>
+                        <Ionicons name="person-circle-outline" size={14} color="#93c5fd" />
+                        <Text style={styles.liveReplayCreatorText}>@{post.username}</Text>
+                      </View>
+                      <Text style={styles.liveReplayInfoDate}>{formatReplayDate(post.created_at)}</Text>
+                    </View>
+                  ) : null}
+                  <Text style={[styles.cardText, isLiveReplay && styles.liveReplayCardText]} numberOfLines={2}>{post.text || `@${post.username}`}</Text>
                   {post.music_risk && post.music_risk !== 'none' ? (
                     <View style={styles.musicWarningPill}>
                       <Ionicons name="musical-notes-outline" size={12} color="#92400e" />
                       <Text style={styles.musicWarningPillText}>Musiikkivaroitus</Text>
                     </View>
                   ) : null}
-                  <Text style={styles.meta}>@{post.username} · {isLiveReplay ? formatReplayDate(post.created_at) : formatRelativeTime(post.created_at)}</Text>
+                  <Text style={[styles.meta, isLiveReplay && styles.liveReplayMeta]}>@{post.username} · {isLiveReplay ? formatReplayDate(post.created_at) : formatRelativeTime(post.created_at)}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -350,8 +386,20 @@ const styles = StyleSheet.create({
   column: { flex: 1, gap: 10 },
   mobileColumn: { flexBasis: 0, minWidth: 0, gap: 8 },
   card: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#fed7aa', borderRadius: 14, padding: 8, gap: 8 },
+  liveReplayCard: {
+    backgroundColor: '#07111f',
+    borderColor: 'rgba(248,113,113,0.42)',
+    shadowColor: '#dc2626',
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+  },
   mobileCard: { minWidth: 0, padding: 6, gap: 6, borderRadius: 12 },
   mediaFrame: { position: 'relative', width: '100%', aspectRatio: 0.78, borderRadius: 14, backgroundColor: '#111827', overflow: 'hidden' },
+  liveReplayFrame: {
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.52)',
+    backgroundColor: '#020617',
+  },
   mobileMediaFrame: { borderRadius: 12 },
   mediaTall: { aspectRatio: 0.62 },
   mediaWide: { aspectRatio: 1.08 },
@@ -367,14 +415,96 @@ const styles = StyleSheet.create({
   heatBadgeText: { color: '#fff', fontSize: 10, fontWeight: '900' },
   videoBadge: { position: 'absolute', left: 8, bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, backgroundColor: 'rgba(15,23,42,0.86)', paddingHorizontal: 8, paddingVertical: 5 },
   videoBadgeText: { color: '#fff', fontSize: 11, fontWeight: '900' },
-  replayMetricsOverlay: { position: 'absolute', left: 8, right: 8, bottom: 42, borderRadius: 12, backgroundColor: 'rgba(2,6,23,0.78)', borderWidth: 1, borderColor: 'rgba(248,113,113,0.35)', paddingHorizontal: 8, paddingVertical: 7, gap: 2 },
-  replayBadgeText: { color: '#fecaca', fontSize: 10, fontWeight: '900' },
-  replayDurationText: { color: '#fff', fontSize: 12, fontWeight: '900' },
-  replayMetricText: { color: '#cbd5e1', fontSize: 10, fontWeight: '800' },
+  replayMetricsOverlay: {
+    position: 'absolute',
+    left: 8,
+    right: 8,
+    bottom: 42,
+    borderRadius: 14,
+    backgroundColor: 'rgba(2,6,23,0.88)',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.46)',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 6,
+    shadowColor: '#ef4444',
+    shadowOpacity: 0.22,
+    shadowRadius: 14,
+  },
+  mobileReplayMetricsOverlay: {
+    bottom: 36,
+    paddingHorizontal: 7,
+    paddingVertical: 7,
+  },
+  replayOverlayHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  replayBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(220,38,38,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.35)',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  replayLiveDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 999,
+    backgroundColor: '#ef4444',
+  },
+  replayBadgeText: { color: '#fecaca', fontSize: 9, fontWeight: '900' },
+  replayDateText: { color: '#94a3b8', fontSize: 9, fontWeight: '800' },
+  replayDurationText: { color: '#fff', fontSize: 13, fontWeight: '900' },
+  replayMetricPillRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+  },
+  replayMetricPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+  },
+  replayMetricPillText: { color: '#e2e8f0', fontSize: 9, fontWeight: '900' },
+  liveReplayInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  liveReplayCreatorBadge: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(37,99,235,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.24)',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  liveReplayCreatorText: { color: '#bfdbfe', fontSize: 10, fontWeight: '900' },
+  liveReplayInfoDate: { color: '#94a3b8', fontSize: 10, fontWeight: '800' },
   cardText: { color: '#111827', fontSize: 14, fontWeight: '800', lineHeight: 19 },
+  liveReplayCardText: { color: '#f8fafc' },
   musicWarningPill: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', paddingHorizontal: 8, paddingVertical: 5 },
   musicWarningPillText: { color: '#92400e', fontSize: 11, fontWeight: '900' },
   meta: { color: '#64748b', fontSize: 12, fontWeight: '700' },
+  liveReplayMeta: { color: '#94a3b8' },
   empty: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e5e7eb', padding: 24, gap: 6 },
   emptyTitle: { color: '#111827', fontSize: 16, fontWeight: '900' },
   emptyBody: { color: '#64748b', textAlign: 'center' },
