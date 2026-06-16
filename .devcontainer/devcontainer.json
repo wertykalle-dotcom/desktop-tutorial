@@ -1,0 +1,20 @@
+{
+  "name": "YOSLA Development Container",
+  "dockerFile": "../frontend/Dockerfile",
+  "context": "..",
+  "forwardPorts": [8000, 8081, 8084],
+  "portsAttributes": {
+    "8000": {
+      "label": "YOSLA Backend API",
+      "onAutoForward": "notify"
+    },
+    "8081": {
+      "label": "Expo Metro Bundler",
+      "onAutoForward": "notify"
+    },
+    "8084": {
+      "label": "YOSLA Web Preview (QR-tunneli)",
+      "onAutoForward": "openBrowser"
+    }
+  }
+}
