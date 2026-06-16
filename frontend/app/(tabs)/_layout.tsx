@@ -13,31 +13,33 @@ type ShellNavItem = {
   label: string;
   route: string;
   icon: keyof typeof Ionicons.glyphMap;
+  color: string;
+  activeBg: string;
   badge?: number;
   prominent?: boolean;
 };
 
 const desktopNavItems: ShellNavItem[] = [
-  { label: 'Syöte', route: '/(tabs)/feed', icon: 'home-outline' },
-  { label: 'Tutki', route: '/(tabs)/explore', icon: 'compass-outline' },
-  { label: 'Livenä', route: '/(tabs)/live', icon: 'radio-outline' },
-  { label: 'Keskustelut', route: '/(tabs)/discussions', icon: 'chatbubbles-outline' },
-  { label: 'Media', route: '/(tabs)/media', icon: 'images-outline' },
-  { label: 'Viestit', route: '/(tabs)/messages', icon: 'mail-unread-outline' },
-  { label: 'Yhteisöt', route: '/(tabs)/communities', icon: 'people-outline' },
-  { label: 'Tallennetut', route: '/(tabs)/saved', icon: 'bookmark-outline' },
-  { label: 'Ilmoitukset', route: '/(tabs)/notifications', icon: 'notifications-outline' },
-  { label: 'Profiili', route: '/(tabs)/profile', icon: 'person-outline' },
-  { label: 'Asetukset', route: '/(tabs)/settings', icon: 'settings-outline' },
+  { label: 'Syöte', route: '/(tabs)/feed', icon: 'home-outline', color: '#2563eb', activeBg: '#1d4ed8' },
+  { label: 'Tutki', route: '/(tabs)/explore', icon: 'compass-outline', color: '#10b981', activeBg: '#047857' },
+  { label: 'Livenä', route: '/(tabs)/live', icon: 'radio-outline', color: '#ef4444', activeBg: '#dc2626' },
+  { label: 'Keskustelut', route: '/(tabs)/discussions', icon: 'chatbubbles-outline', color: '#8b5cf6', activeBg: '#7c3aed' },
+  { label: 'Media', route: '/(tabs)/media', icon: 'images-outline', color: '#06b6d4', activeBg: '#0891b2' },
+  { label: 'Viestit', route: '/(tabs)/messages', icon: 'mail-unread-outline', color: '#f59e0b', activeBg: '#d97706' },
+  { label: 'Yhteisöt', route: '/(tabs)/communities', icon: 'people-outline', color: '#14b8a6', activeBg: '#0f766e' },
+  { label: 'Tallennetut', route: '/(tabs)/saved', icon: 'bookmark-outline', color: '#f43f5e', activeBg: '#e11d48' },
+  { label: 'Ilmoitukset', route: '/(tabs)/notifications', icon: 'notifications-outline', color: '#fb7185', activeBg: '#be123c' },
+  { label: 'Profiili', route: '/(tabs)/profile', icon: 'person-outline', color: '#6366f1', activeBg: '#4f46e5' },
+  { label: 'Asetukset', route: '/(tabs)/settings', icon: 'settings-outline', color: '#64748b', activeBg: '#334155' },
 ];
 
 const mobileNavItems: ShellNavItem[] = [
-  { label: 'Syöte', route: '/(tabs)/feed', icon: 'home-outline' },
-  { label: 'Tutki', route: '/(tabs)/explore', icon: 'compass-outline' },
-  { label: '+', route: '/(tabs)/create', icon: 'add', prominent: true },
-  { label: 'Livenä', route: '/(tabs)/live', icon: 'radio-outline' },
-  { label: 'Ilmoitukset', route: '/(tabs)/notifications', icon: 'notifications-outline' },
-  { label: 'Profiili', route: '/(tabs)/profile', icon: 'person-outline' },
+  { label: 'Syöte', route: '/(tabs)/feed', icon: 'home-outline', color: '#2563eb', activeBg: '#1d4ed8' },
+  { label: 'Tutki', route: '/(tabs)/explore', icon: 'compass-outline', color: '#10b981', activeBg: '#047857' },
+  { label: '+', route: '/(tabs)/create', icon: 'add', prominent: true, color: '#0066ff', activeBg: '#0066ff' },
+  { label: 'Livenä', route: '/(tabs)/live', icon: 'radio-outline', color: '#ef4444', activeBg: '#dc2626' },
+  { label: 'Ilmoitukset', route: '/(tabs)/notifications', icon: 'notifications-outline', color: '#fb7185', activeBg: '#be123c' },
+  { label: 'Profiili', route: '/(tabs)/profile', icon: 'person-outline', color: '#6366f1', activeBg: '#4f46e5' },
 ];
 
 function YoslaTabBar({
@@ -83,11 +85,19 @@ function YoslaTabBar({
               accessibilityRole="button"
               accessibilityLabel={item.label === '+' ? 'Luo' : item.label}
             >
-              <View style={[styles.mobileIconShell, active && styles.mobileIconShellActive, item.prominent && styles.mobileCreateIcon]}>
-                <Ionicons name={item.icon} size={item.prominent ? 24 : 20} color={item.prominent || active ? '#fff' : '#64748B'} />
+              <View
+                style={[
+                  styles.mobileIconShell,
+                  { backgroundColor: active ? item.activeBg : `${item.color}14` },
+                  active && styles.mobileIconShellActive,
+                  item.prominent && styles.mobileCreateIcon,
+                  item.prominent && { backgroundColor: item.activeBg },
+                ]}
+              >
+                <Ionicons name={item.icon} size={item.prominent ? 24 : 20} color={item.prominent || active ? '#fff' : item.color} />
                 {item.badge ? <View style={styles.navBadge}><Text style={styles.navBadgeText}>{item.badge}</Text></View> : null}
               </View>
-              <Text style={[styles.mobileNavLabel, active && styles.mobileNavLabelActive]}>{item.label}</Text>
+              <Text style={[styles.mobileNavLabel, active && { color: item.color }]}>{item.label}</Text>
             </Pressable>
           );
         })}
@@ -102,7 +112,10 @@ function YoslaTabBar({
           <Text style={styles.brandMarkText}>Y</Text>
         </View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.brandTitle}>YOSLA</Text>
+          <View style={styles.brandTitleRow}>
+            <Text style={styles.brandTitle}>YOSLA</Text>
+            <Text style={styles.brandLivePill}>LIVE</Text>
+          </View>
           <Text style={styles.brandSubtitle}>SOME LIFE</Text>
         </View>
       </View>
@@ -113,13 +126,17 @@ function YoslaTabBar({
           return (
             <Pressable
               key={`${item.label}-${item.route}`}
-              style={[styles.desktopNavItem, active && styles.desktopNavItemActive]}
+              style={[
+                styles.desktopNavItem,
+                { borderLeftColor: active ? item.color : `${item.color}44` },
+                active && { backgroundColor: item.activeBg },
+              ]}
               onPress={() => navigateTo(item.route)}
               accessibilityRole="button"
               accessibilityLabel={item.label}
             >
-              <View style={[styles.desktopIconShell, active && styles.desktopIconShellActive]}>
-                <Ionicons name={item.icon} size={18} color={active ? '#fff' : '#0066FF'} />
+              <View style={[styles.desktopIconShell, { backgroundColor: `${item.color}14`, borderColor: `${item.color}30` }, active && styles.desktopIconShellActive]}>
+                <Ionicons name={item.icon} size={18} color={active ? '#fff' : item.color} />
               </View>
               <Text style={[styles.desktopNavText, active && styles.desktopNavTextActive]}>{item.label}</Text>
               {item.badge ? <View style={styles.navBadge}><Text style={styles.navBadgeText}>{item.badge}</Text></View> : null}
@@ -485,26 +502,36 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
-    paddingBottom: 18,
-    borderBottomWidth: 1,
-    borderBottomColor: '#E5EAF2',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#1e3a8a',
+    backgroundColor: '#07111f',
+    padding: 14,
     marginBottom: 14,
+    shadowColor: '#0066ff',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
   },
   brandMark: {
     width: 44,
     height: 44,
     borderRadius: 12,
-    backgroundColor: '#0066FF',
+    backgroundColor: '#0f62fe',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#0066FF',
+    shadowColor: '#38bdf8',
     shadowOpacity: 0.35,
     shadowRadius: 16,
   },
   brandMarkText: {
-    color: '#0F172A',
+    color: '#fff',
     fontSize: 22,
     fontWeight: '900',
+  },
+  brandTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   brandTitle: {
     color: '#fff',
@@ -512,8 +539,18 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     letterSpacing: 0,
   },
+  brandLivePill: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    backgroundColor: '#dc2626',
+    color: '#fff',
+    fontSize: 9,
+    fontWeight: '900',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+  },
   brandSubtitle: {
-    color: '#64748B',
+    color: '#93c5fd',
     fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0,
@@ -524,13 +561,11 @@ const styles = StyleSheet.create({
   desktopNavItem: {
     minHeight: 44,
     borderRadius: 8,
+    borderLeftWidth: 4,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
     paddingHorizontal: 10,
-  },
-  desktopNavItemActive: {
-    backgroundColor: '#0066FF',
   },
   desktopIconShell: {
     width: 32,
@@ -671,7 +706,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   mobileIconShellActive: {
-    backgroundColor: '#0066FF',
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
   },
   mobileCreateIcon: {
     width: 48,
@@ -685,8 +722,5 @@ const styles = StyleSheet.create({
     color: '#64748B',
     fontSize: 9,
     fontWeight: '900',
-  },
-  mobileNavLabelActive: {
-    color: '#0066FF',
   },
 });
