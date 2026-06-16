@@ -1,18 +1,139 @@
-import { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useLocalSearchParams } from 'expo-router';
+import React, { useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Alert, Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { VideoView, useVideoPlayer } from 'expo-video';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { useApiClient } from '../../src/hooks/useApiClient';
+import { API_BASE } from '../../src/utils/api/http';
+import { formatCompactCount, formatReplayDate, formatReplayDuration, isLiveReplayPost } from '../../src/features/video/liveReplay';
+import { PostActionsButton, shareActionPost, type ActionablePost } from '../../src/features/postActions/PostActionsButton';
+
+const BACKEND_BASE = API_BASE.replace(/\/api$/, '');
+
+const resolveMediaUrl = (uri?: string | null) => {
+  if (!uri) return undefined;
+  if (/^https?:\/\//i.test(uri)) return uri;
+  return `${BACKEND_BASE}${uri.startsWith('/') ? uri : `/${uri}`}`;
+};
+
+const logVideoEvent = (name: string, video: HTMLVideoElement, postId?: string, src?: string) => {
+  const payload = {
+    label: 'post-detail',
+    postId,
+    src,
+    currentSrc: video.currentSrc,
+    currentTime: video.currentTime,
+    duration: video.duration,
+    paused: video.paused,
+    ended: video.ended,
+    seeking: video.seeking,
+    readyState: video.readyState,
+    networkState: video.networkState,
+    errorCode: video.error?.code,
+    errorMessage: video.error?.message,
+  };
+  if (name === 'error' || name === 'stalled' || name === 'abort') {
+    console.warn(`[video-playback] ${name}`, payload);
+  } else {
+    console.info(`[video-playback] ${name}`, payload);
+  }
+};
+
+const StableWebVideo = React.memo(function StableWebVideo({
+  postId,
+  poster,
+  src,
+  onAnalytics,
+}: {
+  postId?: string;
+  poster?: string;
+  src: string;
+  onAnalytics?: (eventName: string, currentTime: number, duration?: number, milestone?: number) => void;
+}) {
+  const lastLoggedSecondRef = useRef(-1);
+  const milestonesRef = useRef(new Set<string>());
+  const mark = (key: string) => {
+    if (milestonesRef.current.has(key)) return false;
+    milestonesRef.current.add(key);
+    return true;
+  };
+  return React.createElement('video', {
+    controls: true,
+    src,
+    poster,
+    playsInline: true,
+    preload: 'metadata',
+    onLoadedMetadata: (event: Event) => logVideoEvent('loadedmetadata', event.currentTarget as HTMLVideoElement, postId, src),
+    onPlaying: (event: Event) => {
+      const video = event.currentTarget as HTMLVideoElement;
+      logVideoEvent('playing', video, postId, src);
+      if (mark('start')) onAnalytics?.('start', video.currentTime, Number.isFinite(video.duration) ? video.duration : undefined);
+    },
+    onPause: (event: Event) => logVideoEvent('pause', event.currentTarget as HTMLVideoElement, postId, src),
+    onWaiting: (event: Event) => logVideoEvent('waiting', event.currentTarget as HTMLVideoElement, postId, src),
+    onStalled: (event: Event) => logVideoEvent('stalled', event.currentTarget as HTMLVideoElement, postId, src),
+    onSuspend: (event: Event) => logVideoEvent('suspend', event.currentTarget as HTMLVideoElement, postId, src),
+    onAbort: (event: Event) => logVideoEvent('abort', event.currentTarget as HTMLVideoElement, postId, src),
+    onEnded: (event: Event) => {
+      const video = event.currentTarget as HTMLVideoElement;
+      logVideoEvent('ended', video, postId, src);
+      if (mark('replay')) onAnalytics?.('replay', video.currentTime, Number.isFinite(video.duration) ? video.duration : undefined, 100);
+    },
+    onError: (event: Event) => logVideoEvent('error', event.currentTarget as HTMLVideoElement, postId, src),
+    onTimeUpdate: (event: Event) => {
+      const video = event.currentTarget as HTMLVideoElement;
+      const rounded = Math.floor(video.currentTime);
+      if (rounded > 0 && rounded % 5 === 0 && lastLoggedSecondRef.current !== rounded) {
+        lastLoggedSecondRef.current = rounded;
+        logVideoEvent('timeupdate', video, postId, src);
+      }
+      if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+      const percent = (video.currentTime / video.duration) * 100;
+      [25, 50, 75, 100].forEach((milestone) => {
+        if (percent >= milestone && mark(String(milestone))) {
+          onAnalytics?.(String(milestone), video.currentTime, video.duration, milestone);
+        }
+      });
+    },
+    style: {
+      width: '100%',
+      aspectRatio: '16 / 9',
+      borderRadius: 16,
+      backgroundColor: '#020617',
+      objectFit: 'contain',
+      display: 'block',
+    },
+  });
+});
 
 type Post = {
   post_id: string;
+  user_id?: string | null;
   username: string;
+  profile_picture?: string | null;
   text: string;
   hashtags?: string[];
   mentions?: string[];
+  image?: string | null;
+  video?: string | null;
+  videoUrl?: string | null;
+  media_url?: string | null;
+  thumbnailUrl?: string | null;
+  thumbnail_url?: string | null;
+  title?: string | null;
+  type?: string | null;
+  status?: string | null;
   likes_count: number;
   comments_count: number;
+  views?: number | null;
+  watch_time?: number | null;
+  completion_rate?: number | null;
+  replay_count?: number | null;
   moderation_status?: string | null;
+  copyright_status?: string | null;
+  music_risk?: string | null;
+  music_warning_acknowledged?: boolean | null;
+  distribution_limited?: boolean | null;
   created_at: string;
 };
 
@@ -24,9 +145,18 @@ type Comment = {
   created_at: string;
 };
 
+function NativeVideo({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, (videoPlayer) => {
+    videoPlayer.loop = false;
+    videoPlayer.muted = false;
+  });
+  return <VideoView player={player} nativeControls contentFit="contain" style={styles.video} />;
+}
+
 export default function PostDetailScreen() {
+  const router = useRouter();
   const { postId, commentId } = useLocalSearchParams<{ postId: string; commentId?: string }>();
-  const { token } = useAuth();
+  const { token, user } = useAuth();
   const { apiFetch } = useApiClient();
   const [post, setPost] = useState<Post | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
@@ -37,23 +167,29 @@ export default function PostDetailScreen() {
 
   useEffect(() => {
     let mounted = true;
-    const load = async () => {
+    const loadPost = async () => {
       if (!postId) return;
       setLoading(true);
-      const [postResp, commentsResp] = await Promise.all([
-        apiFetch(`/posts/${postId}`, {}, { requireAuth: true }),
-        apiFetch(`/posts/${postId}/comments`, {}, { requireAuth: true }),
-      ]);
+      const postResp = await apiFetch(`/posts/${postId}`, {}, { requireAuth: true });
       const data = postResp && postResp.ok ? await postResp.json() : null;
-      const commentData = commentsResp && commentsResp.ok ? await commentsResp.json() : [];
       if (!mounted) return;
       setPost(data);
+      setLoading(false);
+    };
+    const loadComments = async () => {
+      if (!postId) return;
+      const commentsResp = await apiFetch(`/posts/${postId}/comments`, {}, { requireAuth: true });
+      const commentData = commentsResp && commentsResp.ok ? await commentsResp.json() : [];
+      if (!mounted) return;
       setComments(Array.isArray(commentData) ? commentData : []);
+    };
+    const load = async () => {
+      await Promise.all([loadPost(), loadComments()]);
       setLoading(false);
     };
     void load();
     const intervalId = setInterval(() => {
-      void load();
+      void loadComments();
     }, 10000);
     return () => {
       mounted = false;
@@ -87,15 +223,169 @@ export default function PostDetailScreen() {
     );
   }
 
+  const videoUri = resolveMediaUrl(post.videoUrl || post.video || post.media_url);
+  const posterUri = resolveMediaUrl(post.thumbnailUrl || post.thumbnail_url || post.image);
+  const isProcessing = post.status === 'processing';
+  const isLiveReplay = isLiveReplayPost(post);
+  const sendVideoAnalytics = async (eventName: string, currentTime: number, duration?: number, milestone?: number) => {
+    try {
+      await apiFetch(`/posts/${post.post_id}/video-analytics`, {
+        method: 'POST',
+        body: JSON.stringify({
+          event: eventName,
+          current_time: currentTime,
+          duration,
+          milestone,
+        }),
+      }, { requireAuth: true });
+    } catch (error) {
+      console.warn('[video-analytics] post detail tracking failed', { postId: post.post_id, eventName, error });
+    }
+  };
+
+  const reportPost = async (target: ActionablePost, reason: 'inappropriate' | 'music_copyright' = 'inappropriate') => {
+    try {
+      const response = await apiFetch('/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_type: 'post',
+          target_id: target.post_id,
+          reason,
+          details: reason === 'music_copyright'
+            ? 'Possible music or copyright issue reported from post detail'
+            : 'Reported from post detail',
+        }),
+      });
+      if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+      Alert.alert('YOSLA', reason === 'music_copyright' ? 'Tekijänoikeusilmoitus lähetetty' : 'Ilmoitus lähetetty');
+    } catch (error) {
+      console.error('[post-actions] report failed', { postId: target.post_id, error });
+      Alert.alert('Virhe', error instanceof Error ? error.message : 'Ilmoituksen lähetys epäonnistui');
+    }
+  };
+
+  const editPost = async (target: ActionablePost) => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      Alert.alert('Muokkaus', 'Avaa muokkaus webissä tai käytä profiilin Recordings-välilehteä tallenteille.');
+      return;
+    }
+    const nextText = window.prompt('Muokkaa julkaisun tekstiä', target.text || target.title || '');
+    if (nextText === null) return;
+    try {
+      const response = await apiFetch(`/posts/${target.post_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: nextText.trim() }),
+      });
+      if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+      const updated = await response.json();
+      setPost((current) => current ? { ...current, ...updated } : updated);
+      Alert.alert('YOSLA', 'Julkaisu päivitetty');
+    } catch (error) {
+      console.error('[post-actions] edit failed', { postId: target.post_id, error });
+      Alert.alert('Virhe', error instanceof Error ? error.message : 'Julkaisun muokkaus epäonnistui');
+    }
+  };
+
+  const deletePost = async (target: ActionablePost) => {
+    const runDelete = async () => {
+      try {
+        const response = await apiFetch(`/posts/${target.post_id}`, { method: 'DELETE' });
+        if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+        Alert.alert('YOSLA', 'Julkaisu poistettu');
+        router.back();
+      } catch (error) {
+        console.error('[post-actions] delete failed', { postId: target.post_id, error });
+        Alert.alert('Virhe', error instanceof Error ? error.message : 'Julkaisun poisto epäonnistui');
+      }
+    };
+    if (Platform.OS === 'web') {
+      if (typeof window === 'undefined' || window.confirm('Poistetaanko julkaisu?')) void runDelete();
+      return;
+    }
+    Alert.alert('Poista julkaisu', 'Poistetaanko julkaisu pysyvästi?', [
+      { text: 'Peruuta', style: 'cancel' },
+      { text: 'Poista', style: 'destructive', onPress: () => void runDelete() },
+    ]);
+  };
+
   return (
-    <ScrollView ref={scrollRef} contentContainerStyle={styles.container}>
-      <Text style={styles.title}>@{post.username}</Text>
-      <Text style={styles.meta}>{post.created_at}</Text>
+    <ScrollView ref={scrollRef} contentContainerStyle={styles.page}>
+      <View style={styles.container}>
+      <View style={styles.headerRow}>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={styles.title}>@{post.username}</Text>
+          <Text style={styles.meta}>{post.created_at}</Text>
+        </View>
+        <View style={styles.headerActions}>
+          <PostActionsButton
+            post={post}
+            currentUserId={user?.user_id}
+            onEdit={editPost}
+            onDelete={deletePost}
+            onHide={() => router.back()}
+            onReport={(target, reason) => void reportPost(target, reason)}
+          />
+          <TouchableOpacity
+            style={styles.shareButton}
+            onPress={() => void shareActionPost(post)}
+            accessibilityRole="button"
+            accessibilityLabel="Jaa julkaisu"
+          >
+            <Text style={styles.shareButtonIcon}>↗</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+      {isLiveReplay ? (
+        <View style={styles.liveReplayHero}>
+          <View style={styles.liveReplayHeader}>
+            {post.profile_picture ? <Image source={{ uri: resolveMediaUrl(post.profile_picture) }} style={styles.replayAvatar} /> : <View style={styles.replayAvatarFallback}><Text style={styles.replayAvatarText}>{post.username.slice(0, 2).toUpperCase()}</Text></View>}
+            <View style={{ flex: 1 }}>
+              <Text style={styles.liveReplayBadge}>🔴 LIVE REPLAY</Text>
+              <Text style={styles.liveReplayTitle}>{post.title || post.text || 'YOSLA Live'}</Text>
+              <Text style={styles.liveReplayMeta}>@{post.username} · {formatReplayDuration(post.duration)} · {formatReplayDate(post.created_at)}</Text>
+            </View>
+          </View>
+          <View style={styles.liveReplayStats}>
+            <Text style={styles.liveReplayStat}>👁 {formatCompactCount(post.views)} Views</Text>
+            <Text style={styles.liveReplayStat}>❤️ {formatCompactCount(post.likes_count)} Likes</Text>
+            <Text style={styles.liveReplayStat}>💬 {formatCompactCount(post.comments_count)} Comments</Text>
+            <Text style={styles.liveReplayStat}>🔁 {formatCompactCount(post.replay_count)} Replays</Text>
+          </View>
+        </View>
+      ) : null}
+      {isProcessing ? (
+        <View style={styles.mediaCard}>
+          <View style={styles.processingFrame}>
+            <ActivityIndicator color="#60a5fa" />
+            <Text style={styles.processingText}>Tallenne valmistuu...</Text>
+          </View>
+        </View>
+      ) : videoUri ? (
+        <View style={styles.mediaCard}>
+          {Platform.OS === 'web'
+            ? <StableWebVideo postId={post.post_id} poster={posterUri} src={videoUri} onAnalytics={sendVideoAnalytics} />
+            : <NativeVideo uri={videoUri} />}
+        </View>
+      ) : posterUri ? (
+        <View style={styles.mediaCard}>
+          <Image source={{ uri: posterUri }} style={styles.image} resizeMode="cover" />
+        </View>
+      ) : null}
       <Text style={styles.body}>{post.text}</Text>
       {post.moderation_status ? (
         <View style={styles.moderationBadge}>
           <Text style={styles.moderationBadgeText}>
             {post.moderation_status === 'queued' ? 'Queued for review' : post.moderation_status}
+          </Text>
+        </View>
+      ) : null}
+      {post.music_risk && post.music_risk !== 'none' ? (
+        <View style={styles.musicWarningStrip}>
+          <Text style={styles.musicWarningIcon}>♪</Text>
+          <Text style={styles.musicWarningText}>
+            Musiikkivaroitus: tämä julkaisu voi sisältää tekijänoikeuksilla suojattua ääntä. Toistuvat vahvistetut rikkomukset laskevat Trust Scorea.
           </Text>
         </View>
       ) : null}
@@ -148,18 +438,42 @@ export default function PostDetailScreen() {
           </View>
         );
       })}
+      </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
-  container: { padding: 16, backgroundColor: '#f5f7fb' },
+  page: { padding: 16, backgroundColor: '#f5f7fb', alignItems: 'center' },
+  container: { width: '100%', maxWidth: 1200 },
+  headerRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 8 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  shareButton: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
+  shareButtonIcon: { color: '#64748b', fontSize: 18, fontWeight: '900' },
   title: { fontSize: 28, fontWeight: '800', color: '#111827', marginBottom: 8 },
   meta: { color: '#6b7280', marginBottom: 16 },
+  liveReplayHero: { width: '100%', maxWidth: 1100, alignSelf: 'center', backgroundColor: '#0f172a', borderRadius: 18, borderWidth: 1, borderColor: 'rgba(248,113,113,0.34)', padding: 14, marginBottom: 14, gap: 12 },
+  liveReplayHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  replayAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#1f2937' },
+  replayAvatarFallback: { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center', backgroundColor: '#1d4ed8' },
+  replayAvatarText: { color: '#fff', fontWeight: '900', fontSize: 13 },
+  liveReplayBadge: { color: '#fecaca', fontSize: 12, fontWeight: '900' },
+  liveReplayTitle: { color: '#fff', fontSize: 18, fontWeight: '900', marginTop: 2 },
+  liveReplayMeta: { color: '#cbd5e1', fontSize: 12, fontWeight: '800', marginTop: 3 },
+  liveReplayStats: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  liveReplayStat: { color: '#e2e8f0', backgroundColor: 'rgba(30,41,59,0.82)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 6, fontSize: 12, fontWeight: '900' },
+  mediaCard: { width: '100%', maxWidth: 1100, alignSelf: 'center', backgroundColor: '#020617', borderRadius: 18, borderWidth: 1, borderColor: '#1f2937', padding: 8, marginBottom: 16, overflow: 'hidden' },
+  video: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#020617', borderRadius: 16 },
+  image: { width: '100%', aspectRatio: 16 / 9, borderRadius: 16, backgroundColor: '#020617' },
+  processingFrame: { width: '100%', aspectRatio: 16 / 9, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#020617' },
+  processingText: { color: '#dbeafe', fontSize: 14, fontWeight: '900' },
   body: { fontSize: 16, color: '#111827', lineHeight: 24, backgroundColor: '#fff', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#e5e7eb' },
   moderationBadge: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: '#fef3c7' },
   moderationBadgeText: { color: '#92400e', fontWeight: '800', fontSize: 12 },
+  musicWarningStrip: { width: '100%', maxWidth: 1100, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, borderWidth: 1, borderColor: '#fde68a', borderRadius: 14, backgroundColor: '#fffbeb', paddingHorizontal: 12, paddingVertical: 10 },
+  musicWarningIcon: { color: '#92400e', fontSize: 16, fontWeight: '900' },
+  musicWarningText: { flex: 1, color: '#92400e', fontSize: 13, fontWeight: '800', lineHeight: 18 },
   tagSection: { marginTop: 14, gap: 8 },
   tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   tagPill: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999 },

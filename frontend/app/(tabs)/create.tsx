@@ -46,6 +46,9 @@ export default function CreatePostScreen() {
   const [dragActive, setDragActive] = useState(false);
   const [selectedFileName, setSelectedFileName] = useState('');
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [pollEnabled, setPollEnabled] = useState(false);
+  const [pollQuestion, setPollQuestion] = useState('');
+  const [pollOptions, setPollOptions] = useState(['', '']);
   const { token } = useAuth();
   const { t, isRTL } = useI18n();
   const router = useRouter();
@@ -57,6 +60,12 @@ export default function CreatePostScreen() {
     setWebVideoFile(null);
     setSelectedFileName('');
     setUploadProgress(0);
+  };
+
+  const resetPoll = () => {
+    setPollEnabled(false);
+    setPollQuestion('');
+    setPollOptions(['', '']);
   };
 
   const applyWebImageFile = (file: File) => {
@@ -173,8 +182,14 @@ export default function CreatePostScreen() {
   };
 
   const handlePost = async () => {
-    if (!text.trim() && !image && !video) {
+    const pollChoices = pollOptions.map((option) => option.trim()).filter(Boolean);
+    const hasPoll = pollEnabled && pollQuestion.trim() && pollChoices.length >= 2;
+    if (!text.trim() && !image && !video && !hasPoll) {
       Alert.alert(t('error'), t('createAddTextOrImage'));
+      return;
+    }
+    if (pollEnabled && !hasPoll) {
+      Alert.alert(t('error'), 'Lisää gallupiin kysymys ja vähintään kaksi vaihtoehtoa.');
       return;
     }
     setLoading(true);
@@ -182,6 +197,12 @@ export default function CreatePostScreen() {
     try {
       const formData = new FormData();
       formData.append('text', text.trim());
+      if (hasPoll) {
+        formData.append('poll', JSON.stringify({
+          question: pollQuestion.trim(),
+          options: pollChoices.slice(0, 4),
+        }));
+      }
 
       if (image || video) {
         const mediaUri = video || image || '';
@@ -266,6 +287,7 @@ export default function CreatePostScreen() {
       if (response.ok) {
         Alert.alert(t('createSuccessTitle'), t('createSuccessBody'));
         setText('');
+        resetPoll();
         resetMedia();
         router.push('/(tabs)/feed');
       } else {
@@ -332,6 +354,48 @@ export default function CreatePostScreen() {
             maxLength={500}
             textAlignVertical="top"
           />
+
+          <TouchableOpacity
+            style={[styles.pollToggle, pollEnabled && styles.pollToggleActive, isRTL && styles.rowReverse]}
+            onPress={() => setPollEnabled((current) => !current)}
+          >
+            <Ionicons name="stats-chart-outline" size={22} color={pollEnabled ? '#fff' : '#0F62FE'} />
+            <Text style={[styles.pollToggleText, pollEnabled && styles.pollToggleTextActive]}>
+              Lisää gallup / äänestys
+            </Text>
+          </TouchableOpacity>
+
+          {pollEnabled ? (
+            <View style={styles.pollBuilder}>
+              <Text style={styles.pollBuilderTitle}>Gallup</Text>
+              <TextInput
+                style={styles.pollQuestionInput}
+                placeholder="Mitä haluat kysyä?"
+                value={pollQuestion}
+                onChangeText={setPollQuestion}
+              />
+              {pollOptions.map((option, index) => (
+                <TextInput
+                  key={`poll-option-${index}`}
+                  style={styles.pollOptionInput}
+                  placeholder={`Vaihtoehto ${index + 1}`}
+                  value={option}
+                  onChangeText={(value) =>
+                    setPollOptions((current) => current.map((item, itemIndex) => itemIndex === index ? value : item))
+                  }
+                />
+              ))}
+              {pollOptions.length < 4 ? (
+                <TouchableOpacity
+                  style={styles.addPollOptionButton}
+                  onPress={() => setPollOptions((current) => [...current, ''])}
+                >
+                  <Ionicons name="add" size={18} color="#0F62FE" />
+                  <Text style={styles.addPollOptionText}>Lisää vaihtoehto</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ) : null}
 
           {Platform.OS === 'web' ? (
             <View
@@ -458,6 +522,77 @@ const styles = StyleSheet.create({
     minHeight: 120,
     color: '#000',
     marginBottom: 16,
+  },
+  pollToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  pollToggleActive: {
+    backgroundColor: '#0F62FE',
+    borderColor: '#0F62FE',
+  },
+  pollToggleText: {
+    color: '#0F62FE',
+    fontSize: 15,
+    fontWeight: '800',
+  },
+  pollToggleTextActive: {
+    color: '#fff',
+  },
+  pollBuilder: {
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: '#f8fbff',
+    borderRadius: 14,
+    padding: 12,
+    gap: 10,
+    marginBottom: 16,
+  },
+  pollBuilderTitle: {
+    color: '#111827',
+    fontSize: 15,
+    fontWeight: '900',
+  },
+  pollQuestionInput: {
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: '#111827',
+    fontSize: 14,
+  },
+  pollOptionInput: {
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    color: '#111827',
+    fontSize: 14,
+  },
+  addPollOptionButton: {
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#eaf3ff',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  addPollOptionText: {
+    color: '#0F62FE',
+    fontWeight: '900',
   },
   dropZone: {
     alignItems: 'center',

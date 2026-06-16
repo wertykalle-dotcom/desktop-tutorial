@@ -11,6 +11,8 @@ import {
 } from '../../src/hooks/useAdminDashboardData';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { ROLE_OPTIONS, isSuperAdmin, roleLabel, type RoleKey } from '../../src/utils/roles';
+import { Ionicons } from '@expo/vector-icons';
+import type { CreatorLevel, DailyTrendsPayload } from '../../src/features/growth/growthTypes';
 import {
   Bar,
   BarChart,
@@ -27,6 +29,7 @@ import {
 
 const card = 'rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-lg shadow-black/20';
 const input = 'w-full rounded-xl border border-slate-700 bg-slate-950 px-4 py-3 text-slate-100 outline-none placeholder:text-slate-500';
+const campaignInput = 'w-full rounded-xl border border-slate-700 bg-[#07111f] px-4 py-3 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-[#0F62FE] focus:shadow-[0_0_0_3px_rgba(15,98,254,0.22)]';
 const buttonBase = 'inline-flex items-center justify-center rounded-xl px-4 py-3 font-semibold transition';
 const primaryButton = `${buttonBase} bg-brand-600 text-white hover:bg-brand-500`;
 const secondaryButton = `${buttonBase} border border-slate-700 bg-slate-900 text-slate-100 hover:bg-slate-800`;
@@ -50,6 +53,24 @@ const defaultHomepageSettings: AdminHomepageSettings = {
   hero_image_alt: 'YOSLA SOME LIFE',
 };
 const BACKEND_ORIGIN = API_BASE.replace(/\/api$/, '');
+const fundingTiers = [
+  { id: 'launch', label: 'Taso 1', amount: 75000, title: 'Lanseeraus' },
+  { id: 'mobile', label: 'Taso 2', amount: 100000, title: 'Mobiiliskaalaus' },
+  { id: 'national', label: 'Taso 3', amount: 250000, title: 'Valtakunnallinen laajennus' },
+];
+const editorTools: { icon: keyof typeof Ionicons.glyphMap; label: string }[] = [
+  { icon: 'text', label: 'Teksti' },
+  { icon: 'list', label: 'Lista' },
+  { icon: 'chatbox-ellipses-outline', label: 'Lainaus' },
+  { icon: 'link', label: 'Linkki' },
+];
+
+type AdminGrowthOverview = {
+  generated_at: string;
+  daily_trends: DailyTrendsPayload;
+  creator_levels: CreatorLevel[];
+  moderation: { trend_posts_reviewable: number; note: string };
+};
 
 export default function AdminWebScreen() {
   const { user, token, updateUser } = useAuth();
@@ -64,6 +85,7 @@ export default function AdminWebScreen() {
     auditLogs,
     presenceTelemetry,
     moderationSettings,
+    moderationAnalytics,
     exchangeRatesText,
     exchangeRatesUpdatedAt,
     systemOverview,
@@ -84,8 +106,12 @@ export default function AdminWebScreen() {
   const [nukeTargetUserId, setNukeTargetUserId] = useState('');
   const [campaignName, setCampaignName] = useState('');
   const [campaignAssetUrl, setCampaignAssetUrl] = useState('');
+  const [campaignAssetType, setCampaignAssetType] = useState<'image' | 'video'>('image');
+  const [campaignVideoUrl, setCampaignVideoUrl] = useState('');
+  const [campaignDescription, setCampaignDescription] = useState('');
   const [campaignTargeting, setCampaignTargeting] = useState('');
-  const [campaignBudget, setCampaignBudget] = useState('0');
+  const [campaignBudget, setCampaignBudget] = useState('75000');
+  const [selectedFundingTierId, setSelectedFundingTierId] = useState('launch');
   const [campaignPlacements, setCampaignPlacements] = useState('in_feed');
   const [campaignCurrency, setCampaignCurrency] = useState('EUR');
   const [paymentUserId, setPaymentUserId] = useState('');
@@ -99,6 +125,7 @@ export default function AdminWebScreen() {
   const [walletAdjustCurrency, setWalletAdjustCurrency] = useState('EUR');
   const [paymentDraft, setPaymentDraft] = useState<AdminPaymentSettings>(defaultPaymentSettings);
   const [homepageDraft, setHomepageDraft] = useState<AdminHomepageSettings>(defaultHomepageSettings);
+  const [growthOverview, setGrowthOverview] = useState<AdminGrowthOverview | null>(null);
 
   useEffect(() => {
     setPaymentDraft(paymentSettings ?? defaultPaymentSettings);
@@ -110,11 +137,19 @@ export default function AdminWebScreen() {
 
   useEffect(() => {
     if (!token || !canAccess) return undefined;
+    const loadGrowth = async () => {
+      const response = await apiFetch('/admin/growth/overview');
+      if (response?.ok) {
+        setGrowthOverview(await response.json());
+      }
+    };
+    void loadGrowth();
     const intervalId = setInterval(() => {
       void loadAdminData();
+      void loadGrowth();
     }, 15000);
     return () => clearInterval(intervalId);
-  }, [canAccess, loadAdminData, token]);
+  }, [apiFetch, canAccess, loadAdminData, token]);
 
   const statusChartData = useMemo(
     () => [
@@ -330,24 +365,75 @@ export default function AdminWebScreen() {
     await loadAdminData();
   };
 
+  const selectedFundingTier = fundingTiers.find((tier) => tier.id === selectedFundingTierId) || fundingTiers[0];
+  const campaignPreviewAssetUrl = campaignAssetUrl
+    ? (campaignAssetUrl.startsWith('http') || campaignAssetUrl.startsWith('blob:') ? campaignAssetUrl : `${BACKEND_ORIGIN}${campaignAssetUrl}`)
+    : '';
+
+  const selectFundingTier = (tier: typeof fundingTiers[number]) => {
+    setSelectedFundingTierId(tier.id);
+    setCampaignBudget(String(tier.amount));
+  };
+
+  const uploadCampaignAsset = async (file: File) => {
+    const formData = new FormData();
+    formData.append('asset', file);
+    const response = await apiFetch('/admin/ads/campaign-asset', {
+      method: 'POST',
+      body: formData,
+    });
+    if (!response?.ok) throw new Error('Campaign asset upload failed');
+    const payload = await response.json();
+    setCampaignAssetUrl(payload.asset_url || '');
+    setCampaignAssetType(payload.asset_type === 'video' ? 'video' : 'image');
+  };
+
+  const pickCampaignAsset = () => {
+    if (typeof document === 'undefined') return;
+    const inputEl = document.createElement('input');
+    inputEl.type = 'file';
+    inputEl.accept = 'image/*,video/mp4,video/webm,video/quicktime';
+    inputEl.onchange = () => {
+      const file = inputEl.files?.[0];
+      if (file) void uploadCampaignAsset(file);
+    };
+    inputEl.click();
+  };
+
+  const handleCampaignDrop = (event: React.DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const file = event.dataTransfer.files?.[0];
+    if (file) void uploadCampaignAsset(file);
+  };
+
   const createCampaign = async () => {
+    const targetingPayload = campaignTargeting.trim() ? JSON.parse(campaignTargeting) : {};
     const response = await apiFetch('/admin/ads/campaigns', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         name: campaignName.trim(),
-        asset_url: campaignAssetUrl.trim() || null,
-        asset_type: 'image',
+        asset_url: (campaignVideoUrl.trim() || campaignAssetUrl.trim()) || null,
+        asset_type: campaignVideoUrl.trim() ? 'video' : campaignAssetType,
         currency: campaignCurrency.trim() || 'EUR',
-        targeting: campaignTargeting.trim() ? JSON.parse(campaignTargeting) : {},
-        budget: Number(campaignBudget || 0),
+        targeting: {
+          ...targetingPayload,
+          description: campaignDescription.trim(),
+          video_url: campaignVideoUrl.trim() || null,
+          funding_tier: selectedFundingTier,
+        },
+        budget: Number(campaignBudget || selectedFundingTier.amount),
         placements: campaignPlacements.split(',').map((item) => item.trim()).filter(Boolean),
       }),
     });
     if (!response?.ok) throw new Error('Campaign create failed');
     setCampaignName('');
     setCampaignAssetUrl('');
+    setCampaignVideoUrl('');
+    setCampaignDescription('');
     setCampaignTargeting('');
+    setCampaignBudget('75000');
+    setSelectedFundingTierId('launch');
     await loadAdminData();
   };
 
@@ -428,6 +514,55 @@ export default function AdminWebScreen() {
           <Text className="mt-1 text-xs uppercase tracking-wider text-slate-500">{t('adminLastSynced')}: {overviewUpdatedAt}</Text>
           <View className="mt-4 grid gap-3 md:grid-cols-2 xl:grid-cols-5">
             {overviewCards.map((item) => cardMetric(item.label, item.value))}
+          </View>
+        </View>
+
+        <View className={`${card} mb-6`}>
+          <View className="flex-row flex-wrap items-start justify-between gap-3">
+            <View>
+              <Text className="text-lg font-semibold text-white">YOSLA Growth Overview</Text>
+              <Text className="mt-2 text-sm text-slate-400">
+                Achievements, Daily Trends ja Creator Levels moderation-näkymässä.
+              </Text>
+            </View>
+            <View className="rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-2">
+              <Text className="text-xs font-bold uppercase tracking-wider text-amber-200">
+                Review {growthOverview?.moderation?.trend_posts_reviewable ?? 0}
+              </Text>
+            </View>
+          </View>
+          <View className="mt-4 grid gap-4 lg:grid-cols-2">
+            <View className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
+              <Text className="text-sm font-bold uppercase tracking-wider text-slate-300">Daily Trends</Text>
+              <View className="mt-3 gap-3">
+                {(growthOverview?.daily_trends?.posts || []).slice(0, 5).map((trend, index) => (
+                  <View key={trend.post_id || `${trend.title}-${index}`} className="flex-row items-center gap-3 rounded-xl bg-slate-900 p-3">
+                    <Text className="w-8 text-lg font-black text-rose-300">#{index + 1}</Text>
+                    <View className="flex-1">
+                      <Text className="font-bold text-white" numberOfLines={1}>{trend.title}</Text>
+                      <Text className="mt-1 text-xs text-slate-400">Score {trend.score} · {trend.comments_count} comments · {trend.views} views</Text>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </View>
+            <View className="rounded-2xl border border-slate-800 bg-slate-950 p-4">
+              <Text className="text-sm font-bold uppercase tracking-wider text-slate-300">Creator Levels</Text>
+              <View className="mt-3 gap-3">
+                {(growthOverview?.creator_levels || []).slice(0, 5).map((creator) => (
+                  <View key={creator.user_id || creator.username} className="rounded-xl bg-slate-900 p-3">
+                    <View className="flex-row items-center justify-between gap-3">
+                      <Text className="font-bold text-white">@{creator.username || 'creator'}</Text>
+                      <Text className="rounded-full bg-blue-600 px-2 py-1 text-xs font-black text-white">Lv {creator.level}</Text>
+                    </View>
+                    <Text className="mt-1 text-xs text-slate-400">{creator.name} · {Math.round(creator.score)} rank points</Text>
+                    <View className="mt-2 h-2 overflow-hidden rounded-full bg-slate-800">
+                      <View className="h-full rounded-full bg-sky-400" style={{ width: `${Math.max(4, Math.min(100, Number(creator.progress || 0)))}%` }} />
+                    </View>
+                  </View>
+                ))}
+              </View>
+            </View>
           </View>
         </View>
 
@@ -576,18 +711,143 @@ export default function AdminWebScreen() {
             </View>
           </View>
 
-          <View className={card}>
-            <Text className="text-lg font-semibold text-white">{t('adminCampaigns')}</Text>
-            <View className="mt-4 gap-3">
-              <TextInput className={input} value={campaignName} onChangeText={setCampaignName} placeholder={t('adminCampaignNamePlaceholder')} placeholderTextColor="#64748b" />
-              <TextInput className={input} value={campaignAssetUrl} onChangeText={setCampaignAssetUrl} placeholder={t('adminCampaignAssetPlaceholder')} placeholderTextColor="#64748b" />
-              <TextInput className={input} value={campaignCurrency} onChangeText={setCampaignCurrency} placeholder={t('adminCampaignCurrencyPlaceholder')} placeholderTextColor="#64748b" />
-              <TextInput className={input} value={campaignBudget} onChangeText={setCampaignBudget} keyboardType="numeric" placeholder={t('adminCampaignBudgetPlaceholder')} placeholderTextColor="#64748b" />
-              <TextInput className={input} value={campaignPlacements} onChangeText={setCampaignPlacements} placeholder={t('adminCampaignPlacementsPlaceholder')} placeholderTextColor="#64748b" />
-              <TextInput className={input} value={campaignTargeting} onChangeText={setCampaignTargeting} multiline placeholder={t('adminCampaignTargetingPlaceholder')} placeholderTextColor="#64748b" />
-              <Pressable className={primaryButton} onPress={() => void createCampaign()}>
-                <Text className="text-white">{t('adminCreateCampaign')}</Text>
-              </Pressable>
+          <View className="xl:col-span-2 overflow-hidden rounded-2xl border border-slate-800 bg-[#050816] shadow-2xl shadow-black/30">
+            <View className="border-b border-slate-800 bg-slate-950/70 px-6 py-5">
+              <Text className="text-xs font-black uppercase tracking-[0.25em] text-[#0F62FE]">Campaign Studio</Text>
+              <Text className="mt-2 text-2xl font-black text-white">{t('adminCampaigns')}</Text>
+              <Text className="mt-2 max-w-3xl text-sm text-slate-400">Rakenna premium-kampanja, määritä rahoitustasot ja tarkista backer-näkymä reaaliajassa.</Text>
+            </View>
+
+            <View className="grid gap-0 xl:grid-cols-[minmax(0,65fr)_minmax(320px,35fr)]">
+              <View className="space-y-5 p-6">
+                <div
+                  className="group flex min-h-[220px] cursor-pointer flex-col items-center justify-center rounded-2xl border border-dashed border-slate-600 bg-[#07111f] p-6 text-center transition hover:border-[#0F62FE] hover:shadow-[0_0_0_3px_rgba(15,98,254,0.18)]"
+                  onClick={pickCampaignAsset}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={handleCampaignDrop}
+                >
+                  <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-[#0F62FE]/15 text-[#60a5fa]">
+                    <Ionicons name="cloud-upload-outline" size={28} color="#60a5fa" />
+                  </div>
+                  <Text className="mt-4 text-lg font-black text-white">Media Dropzone</Text>
+                  <Text className="mt-2 max-w-md text-sm text-slate-400">Raahaa tähän korkean resoluution kampanjakuva tai lyhyt looppaava video. Voit myös klikata valitaksesi tiedoston.</Text>
+                  <Text className="mt-3 text-xs font-bold uppercase tracking-wider text-slate-500">PNG, JPG, WEBP, MP4, WEBM</Text>
+                </div>
+
+                <View className="grid gap-4 md:grid-cols-2">
+                  <View>
+                    <Text className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Kampanjan nimi</Text>
+                    <TextInput className={campaignInput} value={campaignName} onChangeText={setCampaignName} placeholder="YOSLA kasvurahoitus" placeholderTextColor="#64748b" />
+                  </View>
+                  <View>
+                    <Text className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Kampanja-videon osoite</Text>
+                    <TextInput className={campaignInput} value={campaignVideoUrl} onChangeText={(value) => { setCampaignVideoUrl(value); if (value.trim()) setCampaignAssetType('video'); }} placeholder="https://.../campaign-loop.mp4" placeholderTextColor="#64748b" />
+                  </View>
+                  <View>
+                    <Text className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Valuutta</Text>
+                    <TextInput className={campaignInput} value={campaignCurrency} onChangeText={setCampaignCurrency} placeholder="EUR" placeholderTextColor="#64748b" />
+                  </View>
+                  <View>
+                    <Text className="mb-2 text-xs font-black uppercase tracking-wider text-slate-400">Sijoittelut</Text>
+                    <TextInput className={campaignInput} value={campaignPlacements} onChangeText={setCampaignPlacements} placeholder="in_feed, sidebar" placeholderTextColor="#64748b" />
+                  </View>
+                </View>
+
+                <View className="rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+                  <View className="mb-3 flex-row items-center justify-between">
+                    <Text className="text-sm font-black uppercase tracking-wider text-slate-300">Rahoitustavoitteet</Text>
+                    <Text className="rounded-full bg-[#0F62FE]/15 px-3 py-1 text-xs font-black text-[#93c5fd]">{Number(campaignBudget || selectedFundingTier.amount).toLocaleString('fi-FI')} €</Text>
+                  </View>
+                  <View className="grid gap-3 md:grid-cols-3">
+                    {fundingTiers.map((tier) => {
+                      const active = tier.id === selectedFundingTierId;
+                      return (
+                        <Pressable
+                          key={tier.id}
+                          className={`rounded-2xl border p-4 transition ${active ? 'border-[#0F62FE] bg-[#0F62FE]/15 shadow-[0_0_0_3px_rgba(15,98,254,0.16)]' : 'border-slate-800 bg-[#07111f]'}`}
+                          onPress={() => selectFundingTier(tier)}
+                        >
+                          <Text className={`text-xs font-black uppercase tracking-wider ${active ? 'text-[#93c5fd]' : 'text-slate-500'}`}>{tier.label}</Text>
+                          <Text className="mt-2 text-xl font-black text-white">{tier.amount.toLocaleString('fi-FI')} €</Text>
+                          <Text className="mt-1 text-sm font-bold text-slate-300">{tier.title}</Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-800">
+                    <div className="h-full rounded-full bg-[#0F62FE]" style={{ width: `${Math.min(100, (Number(campaignBudget || 0) / 250000) * 100)}%` }} />
+                  </div>
+                </View>
+
+                <View className="rounded-2xl border border-slate-800 bg-[#07111f]">
+                  <View className="flex-row flex-wrap items-center gap-2 border-b border-slate-800 px-4 py-3">
+                    {editorTools.map((tool) => (
+                      <Pressable key={tool.label} className="flex h-9 w-9 items-center justify-center rounded-xl bg-slate-900 hover:bg-slate-800">
+                        <Ionicons name={tool.icon} size={17} color="#94a3b8" />
+                      </Pressable>
+                    ))}
+                  </View>
+                  <TextInput
+                    className="min-h-[180px] w-full px-4 py-4 text-base leading-7 text-slate-100 outline-none placeholder:text-slate-500"
+                    value={campaignDescription}
+                    onChangeText={setCampaignDescription}
+                    multiline
+                    textAlignVertical="top"
+                    placeholder="Kampanjan pitkä kuvausteksti: kerro visio, mihin rahoitus käytetään ja miksi backerit liittyvät mukaan."
+                    placeholderTextColor="#64748b"
+                  />
+                </View>
+
+                <TextInput className={campaignInput} value={campaignTargeting} onChangeText={setCampaignTargeting} multiline placeholder={t('adminCampaignTargetingPlaceholder')} placeholderTextColor="#64748b" />
+
+                <Pressable className="inline-flex items-center justify-center rounded-xl bg-[#0F62FE] px-5 py-4 font-black text-white transition hover:bg-[#2563eb]" onPress={() => void createCampaign()}>
+                  <Text className="text-base font-black text-white">{t('adminCreateCampaign')}</Text>
+                </Pressable>
+              </View>
+
+              <View className="border-t border-slate-800 bg-slate-950/70 p-6 xl:border-l xl:border-t-0">
+                <div className="sticky top-6">
+                  <Text className="mb-3 text-xs font-black uppercase tracking-[0.22em] text-slate-500">Live preview</Text>
+                  <View className="overflow-hidden rounded-2xl border border-slate-800 bg-[#07111f] shadow-xl shadow-black/30">
+                    <View className="aspect-video bg-slate-900">
+                      {campaignPreviewAssetUrl ? (
+                        campaignAssetType === 'video' || campaignVideoUrl.trim() ? (
+                          React.createElement('video', {
+                            src: campaignVideoUrl.trim() || campaignPreviewAssetUrl,
+                            autoPlay: true,
+                            muted: true,
+                            loop: true,
+                            playsInline: true,
+                            style: { width: '100%', height: '100%', objectFit: 'cover' },
+                          })
+                        ) : (
+                          <Image source={{ uri: campaignPreviewAssetUrl }} style={{ width: '100%', height: '100%' }} resizeMode="cover" />
+                        )
+                      ) : (
+                        <View className="flex h-full w-full items-center justify-center">
+                          <Ionicons name="image-outline" size={42} color="#475569" />
+                        </View>
+                      )}
+                    </View>
+                    <View className="p-5">
+                      <Text className="text-xs font-black uppercase tracking-wider text-[#60a5fa]">{selectedFundingTier.title}</Text>
+                      <Text className="mt-2 text-2xl font-black text-white">{campaignName || 'YOSLA SOME LIFE - kasvukampanja'}</Text>
+                      <Text className="mt-3 text-sm leading-6 text-slate-300" numberOfLines={4}>
+                        {campaignDescription || 'Tämä preview näyttää, miltä kampanja näyttää backereille. Lisää kuva, nimi ja pitkä kuvaus nähdäksesi valmiin kortin.'}
+                      </Text>
+                      <View className="mt-5 rounded-2xl bg-slate-950 p-4">
+                        <View className="flex-row items-center justify-between">
+                          <Text className="text-xs font-black uppercase tracking-wider text-slate-500">Tavoite</Text>
+                          <Text className="text-sm font-black text-white">{selectedFundingTier.amount.toLocaleString('fi-FI')} €</Text>
+                        </View>
+                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-800">
+                          <div className="h-full w-[32%] rounded-full bg-[#0F62FE]" />
+                        </div>
+                      </View>
+                    </View>
+                  </View>
+                </div>
+              </View>
             </View>
           </View>
 
@@ -749,6 +1009,55 @@ export default function AdminWebScreen() {
               <Pressable className={secondaryButton} onPress={() => void refreshExchangeRates()}>
                 <Text className="text-slate-100">{t('adminRefreshRates')}</Text>
               </Pressable>
+            </View>
+          </View>
+        </View>
+
+        <View className="mb-6 grid gap-6 xl:grid-cols-2">
+          <View className={card}>
+            <Text className="text-lg font-semibold text-white">Moderation Analytics</Text>
+            <Text className="mt-2 text-sm text-slate-400">Copyright, music risk and Trust Score signals.</Text>
+            <View className="mt-4 grid gap-3 md:grid-cols-3">
+              {[
+                ['Copyright today', moderationAnalytics?.copyright_reports_today ?? 0],
+                ['Music today', moderationAnalytics?.music_reports_today ?? 0],
+                ['Trust events', moderationAnalytics?.trust_events_today ?? 0],
+                ['Pending', moderationAnalytics?.pending_count ?? queue.length],
+                ['Reviewed', moderationAnalytics?.reviewed_count ?? history.length],
+                ['Total', moderationAnalytics?.total_items ?? queue.length + history.length],
+              ].map(([label, value]) => (
+                <View key={String(label)} className="rounded-xl border border-slate-800 bg-slate-950 p-3">
+                  <Text className="text-xs font-semibold uppercase text-slate-500">{label}</Text>
+                  <Text className="mt-1 text-2xl font-black text-white">{value}</Text>
+                </View>
+              ))}
+            </View>
+            <View className="mt-5 h-56 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={Object.entries(moderationAnalytics?.by_status || {}).map(([name, value]) => ({ name, value }))}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" />
+                  <XAxis dataKey="name" stroke="#cbd5e1" />
+                  <YAxis stroke="#cbd5e1" />
+                  <Tooltip />
+                  <Bar dataKey="value" fill="#38bdf8" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </View>
+          </View>
+
+          <View className={card}>
+            <Text className="text-lg font-semibold text-white">Repeat Offenders</Text>
+            <Text className="mt-2 text-sm text-slate-400">Users with repeated moderation signals.</Text>
+            <View className="mt-4 space-y-3">
+              {(moderationAnalytics?.repeat_offenders || []).slice(0, 6).length === 0 ? (
+                <Text className="text-sm text-slate-500">{t('adminNoData')}</Text>
+              ) : (moderationAnalytics?.repeat_offenders || []).slice(0, 6).map((item) => (
+                <View key={item.user_id} className="rounded-xl border border-slate-800 bg-slate-950 p-4">
+                  <Text className="text-sm font-semibold text-white">{item.user_id}</Text>
+                  <Text className="mt-1 text-xs text-slate-400">Reports: {item.count} · {item.latest_reason || t('adminNoData')}</Text>
+                  <Text className="mt-1 text-xs text-slate-500">{item.latest_at || t('adminNoData')}</Text>
+                </View>
+              ))}
             </View>
           </View>
         </View>

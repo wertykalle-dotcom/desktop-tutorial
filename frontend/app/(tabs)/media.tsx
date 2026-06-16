@@ -1,12 +1,16 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Platform, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, Alert, Image, Platform, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { useRouter } from 'expo-router';
 import { useApiClient } from '../../src/hooks/useApiClient';
+import { useAuth } from '../../src/contexts/AuthContext';
+import { liveSignalingSocket } from '../../src/realtime/live-signaling';
 import { API_BASE } from '../../src/utils/api/http';
 import { formatRelativeTime } from '../../src/utils/time';
 import type { Post } from '../../src/features/feed/dwell';
+import { formatCompactCount, formatReplayDate, formatReplayDuration, isLiveReplayPost } from '../../src/features/video/liveReplay';
+import { PostActionsButton, shareActionPost, type ActionablePost } from '../../src/features/postActions/PostActionsButton';
 
 const BACKEND_BASE = API_BASE.replace(/\/api$/, '');
 
@@ -15,6 +19,60 @@ const resolveMediaUrl = (uri?: string) => {
   if (/^https?:\/\//i.test(uri)) return uri;
   return `${BACKEND_BASE}${uri.startsWith('/') ? uri : `/${uri}`}`;
 };
+
+const buildVideoDebugProps = (label: string, postId: string, src?: string) => Platform.OS === 'web'
+  ? {
+      onLoadedMetadata: (event: Event) => {
+        const video = event.currentTarget as HTMLVideoElement;
+        console.info('[video-playback] loadedmetadata', {
+          label,
+          postId,
+          src,
+          duration: video.duration,
+          readyState: video.readyState,
+          networkState: video.networkState,
+        });
+      },
+      onError: (event: Event) => {
+        const video = event.currentTarget as HTMLVideoElement;
+        console.error('[video-playback] error', {
+          label,
+          postId,
+          src,
+          currentTime: video.currentTime,
+          duration: video.duration,
+          readyState: video.readyState,
+          networkState: video.networkState,
+          errorCode: video.error?.code,
+          errorMessage: video.error?.message,
+        });
+      },
+      onEnded: (event: Event) => {
+        const video = event.currentTarget as HTMLVideoElement;
+        console.info('[video-playback] ended', {
+          label,
+          postId,
+          src,
+          currentTime: video.currentTime,
+          duration: video.duration,
+          readyState: video.readyState,
+          networkState: video.networkState,
+        });
+      },
+      onStalled: (event: Event) => {
+        const video = event.currentTarget as HTMLVideoElement;
+        console.warn('[video-playback] stalled', {
+          label,
+          postId,
+          src,
+          currentTime: video.currentTime,
+          duration: video.duration,
+          readyState: video.readyState,
+          networkState: video.networkState,
+        });
+      },
+    }
+  : {};
 
 function NativeVideo({ uri }: { uri: string }) {
   const player = useVideoPlayer(uri, (videoPlayer) => {
@@ -26,22 +84,24 @@ function NativeVideo({ uri }: { uri: string }) {
 
 export default function MediaScreen() {
   const { apiFetch } = useApiClient();
+  const { user } = useAuth();
   const router = useRouter();
   const { width } = useWindowDimensions();
+  const isMobile = width < 768;
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const loadMedia = useCallback(async () => {
     try {
-      const response = await apiFetch('/posts?following_only=false&limit=60');
+      const response = await apiFetch('/media/posts?limit=120');
       if (!response?.ok) {
         setPosts([]);
         return;
       }
       const payload = await response.json();
       const allPosts = Array.isArray(payload) ? payload as Post[] : [];
-      setPosts(allPosts.filter((post) => post.image || post.video));
+      setPosts(allPosts);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -52,9 +112,90 @@ export default function MediaScreen() {
     void loadMedia();
   }, [loadMedia]);
 
+  useEffect(() => {
+    const handleVideoReady = () => {
+      void loadMedia();
+    };
+    liveSignalingSocket.on('VIDEO_READY', handleVideoReady);
+    return () => {
+      liveSignalingSocket.off('VIDEO_READY', handleVideoReady);
+    };
+  }, [loadMedia]);
+
   const onRefresh = () => {
     setRefreshing(true);
     void loadMedia();
+  };
+
+  const hidePost = (postId: string) => {
+    setPosts((current) => current.filter((post) => post.post_id !== postId));
+  };
+
+  const reportPost = async (post: ActionablePost, reason: 'inappropriate' | 'music_copyright' = 'inappropriate') => {
+    try {
+      const response = await apiFetch('/reports', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          target_type: 'post',
+          target_id: post.post_id,
+          reason,
+          details: reason === 'music_copyright'
+            ? 'Possible music or copyright issue reported from media feed'
+            : 'Reported from media feed',
+        }),
+      });
+      if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+      Alert.alert('YOSLA', reason === 'music_copyright' ? 'Tekijänoikeusilmoitus lähetetty' : 'Ilmoitus lähetetty');
+    } catch (error) {
+      console.error('[post-actions] report failed', { postId: post.post_id, error });
+      Alert.alert('Virhe', error instanceof Error ? error.message : 'Ilmoituksen lähetys epäonnistui');
+    }
+  };
+
+  const editPost = async (post: ActionablePost) => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') {
+      Alert.alert('Muokkaus', 'Avaa julkaisu muokkausta varten.');
+      return;
+    }
+    const nextText = window.prompt('Muokkaa julkaisun tekstiä', post.text || post.title || '');
+    if (nextText === null) return;
+    try {
+      const response = await apiFetch(`/posts/${post.post_id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: nextText.trim() }),
+      });
+      if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+      const updated = await response.json();
+      setPosts((current) => current.map((item) => item.post_id === updated.post_id ? { ...item, ...updated } : item));
+      Alert.alert('YOSLA', 'Julkaisu päivitetty');
+    } catch (error) {
+      console.error('[post-actions] edit failed', { postId: post.post_id, error });
+      Alert.alert('Virhe', error instanceof Error ? error.message : 'Julkaisun muokkaus epäonnistui');
+    }
+  };
+
+  const deletePost = async (post: ActionablePost) => {
+    const runDelete = async () => {
+      try {
+        const response = await apiFetch(`/posts/${post.post_id}`, { method: 'DELETE' });
+        if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+        hidePost(post.post_id);
+        Alert.alert('YOSLA', 'Julkaisu poistettu');
+      } catch (error) {
+        console.error('[post-actions] delete failed', { postId: post.post_id, error });
+        Alert.alert('Virhe', error instanceof Error ? error.message : 'Julkaisun poisto epäonnistui');
+      }
+    };
+    if (Platform.OS === 'web') {
+      if (typeof window === 'undefined' || window.confirm('Poistetaanko julkaisu?')) void runDelete();
+      return;
+    }
+    Alert.alert('Poista julkaisu', 'Poistetaanko julkaisu pysyvästi?', [
+      { text: 'Peruuta', style: 'cancel' },
+      { text: 'Poista', style: 'destructive', onPress: () => void runDelete() },
+    ]);
   };
 
   if (loading) {
@@ -65,39 +206,77 @@ export default function MediaScreen() {
     );
   }
 
-  const columnCount = width < 768 ? 2 : width >= 1280 ? 5 : width >= 1024 ? 4 : 3;
+  const columnCount = isMobile ? 2 : width >= 1280 ? 5 : width >= 1024 ? 4 : 3;
   const columns = Array.from({ length: columnCount }, (_, columnIndex) =>
     posts.filter((_, index) => index % columnCount === columnIndex)
   );
 
   return (
     <ScrollView
-      contentContainerStyle={styles.container}
+      contentContainerStyle={[styles.container, isMobile && styles.mobileContainer]}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
       <View style={styles.hero}>
         <Text style={styles.kicker}>Kuva & video</Text>
         <Text style={styles.title}>Mediavirta</Text>
-        <Text style={styles.body}>Tiivis Pinterest/TikTok-tyylinen ruudukko nostaa yhteisön kuvat, videot ja viraalit hetket pintaan.</Text>
+        <Text style={styles.body}>YOSLA-tyylinen ruudukko nostaa yhteisön kuvat, videot ja viraali hetket pintaan.</Text>
       </View>
 
-      <View style={styles.grid}>
+      <View style={[styles.grid, isMobile && styles.mobileGrid]}>
         {columns.map((column, columnIndex) => (
-          <View key={`column-${columnIndex}`} style={styles.column}>
+          <View key={`column-${columnIndex}`} style={[styles.column, isMobile && styles.mobileColumn]}>
             {column.map((post, itemIndex) => {
               const variant = (itemIndex + columnIndex) % 4;
+              const postVideo = post.videoUrl || post.video;
+              const isProcessing = post.status === 'processing';
+              const isLiveReplay = isLiveReplayPost(post);
+              const mediaFrameStyle = [
+                styles.mediaFrame,
+                isMobile && styles.mobileMediaFrame,
+                postVideo ? styles.mediaVideoTall : null,
+                !postVideo && variant === 0 && styles.mediaTall,
+                !postVideo && variant === 1 && styles.mediaWide,
+                !postVideo && variant === 2 && styles.mediaShort,
+              ];
               return (
-                <TouchableOpacity key={post.post_id} style={styles.card} onPress={() => router.push(`/posts/${post.post_id}`)}>
-                  <View style={[styles.mediaFrame, variant === 0 && styles.mediaTall, variant === 1 && styles.mediaWide, variant === 2 && styles.mediaShort]}>
-                    {post.image ? (
-                      <Image source={{ uri: resolveMediaUrl(post.image) }} style={styles.image} resizeMode="cover" />
-                    ) : post.video ? (
+                <TouchableOpacity key={post.post_id} style={[styles.card, isMobile && styles.mobileCard]} onPress={() => router.push(`/posts/${post.post_id}`)}>
+                  <View style={mediaFrameStyle}>
+                    <View style={styles.cardActions}>
+                      <PostActionsButton
+                        post={post}
+                        currentUserId={user?.user_id}
+                        compact
+                        onEdit={editPost}
+                        onDelete={deletePost}
+                        onHide={(target) => hidePost(target.post_id)}
+                        onReport={(target, reason) => void reportPost(target, reason)}
+                      />
+                      <TouchableOpacity
+                        style={styles.cardActionButton}
+                        onPress={(event) => {
+                          event.stopPropagation?.();
+                          void shareActionPost(post);
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel="Jaa julkaisu"
+                      >
+                        <Ionicons name="share-social-outline" size={16} color="#64748b" />
+                      </TouchableOpacity>
+                    </View>
+                    {isProcessing ? (
+                      <View style={styles.processingFrame}>
+                        <ActivityIndicator color="#60a5fa" />
+                        <Text style={styles.processingText}>Tallenne valmistuu...</Text>
+                      </View>
+                    ) : postVideo ? (
                       Platform.OS === 'web'
                         ? React.createElement('video', {
-                            src: resolveMediaUrl(post.video),
+                            src: resolveMediaUrl(postVideo),
                             controls: true,
                             muted: true,
                             playsInline: true,
+                            poster: resolveMediaUrl(post.image),
+                            ...buildVideoDebugProps('media-card', post.post_id, resolveMediaUrl(postVideo)),
                             style: {
                               width: '100%',
                               height: '100%',
@@ -106,20 +285,40 @@ export default function MediaScreen() {
                               backgroundColor: '#111827',
                             },
                           })
-                        : <NativeVideo uri={resolveMediaUrl(post.video) || post.video} />
+                        : <NativeVideo uri={resolveMediaUrl(postVideo) || postVideo} />
+                    ) : post.image ? (
+                      <Image source={{ uri: resolveMediaUrl(post.image) }} style={styles.image} resizeMode="cover" />
                     ) : null}
                     <View style={styles.heatBadge}>
                       <Text style={styles.heatBadgeText}>{variant === 0 ? '🚀 Ilmiö' : variant === 1 ? '🔥 Kuuma' : '☄️ +12 kommenttia'}</Text>
                     </View>
-                    {post.video ? (
+                    {postVideo ? (
                       <View style={styles.videoBadge}>
                         <Ionicons name="play" size={12} color="#fff" />
-                        <Text style={styles.videoBadgeText}>Video</Text>
+                        <Text style={styles.videoBadgeText}>{isLiveReplay ? 'LIVE REPLAY' : 'Video'}</Text>
+                      </View>
+                    ) : isProcessing ? (
+                      <View style={styles.videoBadge}>
+                        <Ionicons name="time-outline" size={12} color="#fff" />
+                        <Text style={styles.videoBadgeText}>Processing</Text>
+                      </View>
+                    ) : null}
+                    {isLiveReplay ? (
+                      <View style={styles.replayMetricsOverlay}>
+                        <Text style={styles.replayBadgeText}>🔴 LIVE REPLAY</Text>
+                        <Text style={styles.replayDurationText}>{formatReplayDuration(post.duration)}</Text>
+                        <Text style={styles.replayMetricText}>👁 {formatCompactCount(post.views)} · ❤️ {formatCompactCount(post.likes_count)} · 💬 {formatCompactCount(post.comments_count)}</Text>
                       </View>
                     ) : null}
                   </View>
                   <Text style={styles.cardText} numberOfLines={2}>{post.text || `@${post.username}`}</Text>
-                  <Text style={styles.meta}>@{post.username} · {formatRelativeTime(post.created_at)}</Text>
+                  {post.music_risk && post.music_risk !== 'none' ? (
+                    <View style={styles.musicWarningPill}>
+                      <Ionicons name="musical-notes-outline" size={12} color="#92400e" />
+                      <Text style={styles.musicWarningPillText}>Musiikkivaroitus</Text>
+                    </View>
+                  ) : null}
+                  <Text style={styles.meta}>@{post.username} · {isLiveReplay ? formatReplayDate(post.created_at) : formatRelativeTime(post.created_at)}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -141,24 +340,40 @@ export default function MediaScreen() {
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff7ed' },
   container: { padding: 12, backgroundColor: '#fff7ed', gap: 14 },
+  mobileContainer: { paddingHorizontal: 8, paddingTop: 10, gap: 10, width: '100%' },
   hero: { backgroundColor: '#2e1065', borderWidth: 1, borderColor: '#a78bfa', borderRadius: 18, padding: 18 },
   kicker: { color: '#facc15', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', marginBottom: 5 },
   title: { color: '#fff', fontSize: 25, fontWeight: '900', marginBottom: 8 },
   body: { color: '#ddd6fe', fontSize: 14, lineHeight: 20 },
   grid: { flexDirection: 'row', gap: 10, alignItems: 'flex-start' },
+  mobileGrid: { gap: 8, width: '100%', alignSelf: 'stretch' },
   column: { flex: 1, gap: 10 },
+  mobileColumn: { flexBasis: 0, minWidth: 0, gap: 8 },
   card: { backgroundColor: '#fff', borderWidth: 1, borderColor: '#fed7aa', borderRadius: 14, padding: 8, gap: 8 },
+  mobileCard: { minWidth: 0, padding: 6, gap: 6, borderRadius: 12 },
   mediaFrame: { position: 'relative', width: '100%', aspectRatio: 0.78, borderRadius: 14, backgroundColor: '#111827', overflow: 'hidden' },
+  mobileMediaFrame: { borderRadius: 12 },
   mediaTall: { aspectRatio: 0.62 },
   mediaWide: { aspectRatio: 1.08 },
   mediaShort: { aspectRatio: 0.92 },
+  mediaVideoTall: { aspectRatio: 0.68 },
   image: { width: '100%', height: '100%' },
   nativeVideo: { width: '100%', height: '100%', backgroundColor: '#111827' },
+  processingFrame: { width: '100%', height: '100%', alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#020617' },
+  processingText: { color: '#dbeafe', fontSize: 12, fontWeight: '900' },
+  cardActions: { position: 'absolute', right: 8, top: 8, zIndex: 10, flexDirection: 'row', gap: 6 },
+  cardActionButton: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
   heatBadge: { position: 'absolute', left: 8, top: 8, borderRadius: 999, backgroundColor: 'rgba(17,24,39,0.82)', paddingHorizontal: 8, paddingVertical: 5 },
   heatBadgeText: { color: '#fff', fontSize: 10, fontWeight: '900' },
   videoBadge: { position: 'absolute', left: 8, bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, backgroundColor: 'rgba(15,23,42,0.86)', paddingHorizontal: 8, paddingVertical: 5 },
   videoBadgeText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  replayMetricsOverlay: { position: 'absolute', left: 8, right: 8, bottom: 42, borderRadius: 12, backgroundColor: 'rgba(2,6,23,0.78)', borderWidth: 1, borderColor: 'rgba(248,113,113,0.35)', paddingHorizontal: 8, paddingVertical: 7, gap: 2 },
+  replayBadgeText: { color: '#fecaca', fontSize: 10, fontWeight: '900' },
+  replayDurationText: { color: '#fff', fontSize: 12, fontWeight: '900' },
+  replayMetricText: { color: '#cbd5e1', fontSize: 10, fontWeight: '800' },
   cardText: { color: '#111827', fontSize: 14, fontWeight: '800', lineHeight: 19 },
+  musicWarningPill: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 999, backgroundColor: '#fffbeb', borderWidth: 1, borderColor: '#fde68a', paddingHorizontal: 8, paddingVertical: 5 },
+  musicWarningPillText: { color: '#92400e', fontSize: 11, fontWeight: '900' },
   meta: { color: '#64748b', fontSize: 12, fontWeight: '700' },
   empty: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e5e7eb', padding: 24, gap: 6 },
   emptyTitle: { color: '#111827', fontSize: 16, fontWeight: '900' },

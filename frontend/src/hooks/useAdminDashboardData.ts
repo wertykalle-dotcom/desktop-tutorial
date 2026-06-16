@@ -129,6 +129,25 @@ export type AdminSystemOverview = {
   updated_at?: string;
 };
 
+export type AdminModerationAnalytics = {
+  generated_at: string;
+  total_items: number;
+  pending_count: number;
+  reviewed_count: number;
+  copyright_reports_today: number;
+  music_reports_today: number;
+  trust_events_today: number;
+  by_status: Record<string, number>;
+  by_reason: Record<string, number>;
+  repeat_offenders: {
+    user_id: string;
+    count: number;
+    latest_reason?: string;
+    latest_at?: string | null;
+  }[];
+  priority_queue: AdminQueueItem[];
+};
+
 export type AdminCampaign = {
   campaign_id: string;
   name: string;
@@ -172,6 +191,7 @@ export function useAdminDashboardData() {
   const [exchangeRatesText, setExchangeRatesText] = useState('');
   const [exchangeRatesUpdatedAt, setExchangeRatesUpdatedAt] = useState('');
   const [systemOverview, setSystemOverview] = useState<AdminSystemOverview | null>(null);
+  const [moderationAnalytics, setModerationAnalytics] = useState<AdminModerationAnalytics | null>(null);
 
   const canAccess = isSuperAdmin(user?.role);
 
@@ -195,6 +215,7 @@ export function useAdminDashboardData() {
         paymentSettingsResp,
         paymentSummaryResp,
         homepageSettingsResp,
+        moderationAnalyticsResp,
       ] = await Promise.all([
         apiFetch('/admin/system-settings'),
         apiFetch('/admin/finance'),
@@ -211,6 +232,7 @@ export function useAdminDashboardData() {
         apiFetch('/admin/payments/config'),
         apiFetch('/admin/payments/summary'),
         apiFetch('/admin/homepage/config'),
+        apiFetch('/admin/moderation/analytics'),
       ]);
       if (settingsResp?.ok) setSystemSettings(await settingsResp.json());
       if (financeResp?.ok) setFinance(await financeResp.json());
@@ -231,6 +253,7 @@ export function useAdminDashboardData() {
       if (paymentSettingsResp?.ok) setPaymentSettings(await paymentSettingsResp.json());
       if (paymentSummaryResp?.ok) setPaymentSummary(await paymentSummaryResp.json());
       if (homepageSettingsResp?.ok) setHomepageSettings(await homepageSettingsResp.json());
+      if (moderationAnalyticsResp?.ok) setModerationAnalytics(await moderationAnalyticsResp.json());
     } finally {
       setLoading(false);
     }
@@ -257,6 +280,7 @@ export function useAdminDashboardData() {
     exchangeRatesText,
     exchangeRatesUpdatedAt,
     systemOverview,
+    moderationAnalytics,
     setQueue,
     setHistory,
     setSystemSettings,
@@ -274,6 +298,7 @@ export function useAdminDashboardData() {
     setExchangeRatesText,
     setExchangeRatesUpdatedAt,
     setSystemOverview,
+    setModerationAnalytics,
     loadAdminData,
     canAccess,
   };

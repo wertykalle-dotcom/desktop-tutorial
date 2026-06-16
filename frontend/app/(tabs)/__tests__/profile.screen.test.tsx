@@ -18,6 +18,7 @@ jest.mock('react-native', () => {
     Image: createMockComponent('Image'),
     ActivityIndicator: createMockComponent('ActivityIndicator'),
     RefreshControl: createMockComponent('RefreshControl'),
+    Modal: createMockComponent('Modal'),
     Alert: { alert: jest.fn() },
     Platform: { OS: 'ios' },
     StyleSheet: {
@@ -125,7 +126,8 @@ jest.mock('expo-image-picker', () => ({
 
 const ProfileScreen = require('../profile').default;
 
-const renderProfileScreen = () => render(<ProfileScreen />);
+const renderProfileScreen = (initialView: 'profile' | 'settings' | 'saved' = 'settings') =>
+  render(<ProfileScreen initialView={initialView} />);
 
 const setProfileUpdateMock = (implementation: typeof mockApiFetch extends jest.Mock ? any : never) => {
   const originalImplementation = mockApiFetch.getMockImplementation();
@@ -157,10 +159,10 @@ afterEach(() => {
 
 describe('ProfileScreen save button state', () => {
   test('renders key non-edit content', () => {
-    const { getByText } = renderProfileScreen();
-    expect(getByText('Muokkaa profiilia')).toBeTruthy();
-    expect(getByText('Kirjaudu ulos')).toBeTruthy();
-    expect(getByText('Turvallisuusasetukset')).toBeTruthy();
+    const { getByText } = renderProfileScreen('profile');
+    expect(getByText('Asetukset')).toBeTruthy();
+    expect(getByText('Tallennetut')).toBeTruthy();
+    expect(getByText('Kieli, parisuhdestatus, turvallisuus ja uloskirjautuminen.')).toBeTruthy();
   });
 
   test('enables save only for valid changed username', () => {
@@ -213,7 +215,7 @@ describe('ProfileScreen save button state', () => {
       following_count: 0,
     };
 
-    const { getAllByText } = renderProfileScreen();
+    const { getAllByText } = renderProfileScreen('profile');
     expect(getAllByText('0').length).toBeGreaterThanOrEqual(3);
     mockAuthValue.user = originalUser;
   });

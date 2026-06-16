@@ -39,6 +39,7 @@ export type ProfileSnapshot = {
   username?: string;
   bio?: string;
   profile_picture?: string;
+  relationship_status?: string | null;
   posts_count?: number;
   followers_count?: number;
   following_count?: number;
@@ -54,20 +55,24 @@ export const hasProfileChanges = (
   original: ProfileSnapshot | null | undefined,
   normalizedUsername: string,
   normalizedBio: string,
-  profilePicture: string
+  profilePicture: string,
+  relationshipStatus?: string
 ): boolean =>
   normalizedUsername !== (original?.username || '') ||
   normalizedBio !== (original?.bio || '') ||
-  (profilePicture || '') !== (original?.profile_picture || '');
+  (profilePicture || '') !== (original?.profile_picture || '') ||
+  (relationshipStatus !== undefined && relationshipStatus !== (original?.relationship_status || 'private'));
 
 export const buildProfileUpdatePayload = (
   normalizedUsername: string,
   normalizedBio: string,
-  profilePicture: string
+  profilePicture: string,
+  relationshipStatus?: string
 ) => ({
   username: normalizedUsername,
   bio: normalizedBio || null,
   profile_picture: profilePicture || null,
+  ...(relationshipStatus ? { relationship_status: relationshipStatus } : {}),
 });
 
 export const formatNotificationsLabel = (unreadCount: number): string =>

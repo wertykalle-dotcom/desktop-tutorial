@@ -7,10 +7,17 @@ const resolveBackendBaseUrl = () => {
   if (typeof window !== 'undefined' && window.location?.origin) {
     const browserOrigin = window.location.origin;
     const browserBackendOrigin = browserOrigin
+      .replace(/:8081$/, ':8000')
       .replace(/:8084$/, ':8000')
+      .replace(/-8081(\.)/, '-8000$1')
       .replace(/-8084(\.)/, '-8000$1');
+    const isBrowserServedFromLocalTunnel =
+      browserOrigin.includes('localhost') ||
+      browserOrigin.includes('127.0.0.1') ||
+      browserOrigin.includes('.app.github.dev');
 
     if (
+      isBrowserServedFromLocalTunnel ||
       !envUrl ||
       envUrl.includes('localhost') ||
       envUrl.includes('127.0.0.1')
@@ -25,7 +32,8 @@ const resolveBackendBaseUrl = () => {
   return 'http://127.0.0.1:8000';
 };
 
-export const API_BASE = `${resolveBackendBaseUrl()}/api`;
+export const BACKEND_BASE = resolveBackendBaseUrl();
+export const API_BASE = `${BACKEND_BASE}/api`;
 
 export const buildApiHeaders = (
   initHeaders?: HeadersInit,

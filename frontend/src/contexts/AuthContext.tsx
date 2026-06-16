@@ -10,6 +10,7 @@ interface User {
   username: string;
   profile_picture?: string;
   bio?: string;
+  relationship_status?: 'single' | 'relationship' | 'complicated' | 'private';
   followers_count: number;
   following_count: number;
   posts_count: number;
@@ -93,6 +94,7 @@ const setToken = async (token: string): Promise<void> => {
 const removeToken = async (): Promise<void> => {
   if (Platform.OS === 'web') {
     localStorage.removeItem(TOKEN_KEY);
+    sessionStorage.removeItem(TOKEN_KEY);
   } else {
     await SecureStore.deleteItemAsync(TOKEN_KEY);
   }
@@ -229,10 +231,6 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const logout = async () => {
     const previousToken = token;
-    await removeToken();
-    setTokenState(null);
-    setUser(null);
-
     try {
       if (previousToken) {
         await fetch(apiUrl('/auth/logout'), {
@@ -242,6 +240,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       }
     } catch (error) {
       console.error('Logout error:', error);
+    } finally {
+      try {
+        await removeToken();
+      } catch (storageError) {
+        console.error('Logout storage cleanup error:', storageError);
+      }
+      setTokenState(null);
+      setUser(null);
+      setLoading(false);
     }
   };
 

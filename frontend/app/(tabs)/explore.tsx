@@ -4,9 +4,9 @@ import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { useAuth } from '../../src/contexts/AuthContext';
-import { Badge } from '../../src/components/Badge';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { type CreatorSuggestion, type ExploreTopic } from '../../src/features/directories/directory-data';
+import type { LocalYoslaPayload } from '../../src/features/growth/growthTypes';
 
 const fallbackTopicLabels = ['#community', '#design', '#build', '#launch', '#fi', '#explore'];
 
@@ -26,6 +26,7 @@ export default function ExploreScreen() {
   const router = useRouter();
   const [topics, setTopics] = useState<ExploreTopic[]>([]);
   const [creators, setCreators] = useState<CreatorSuggestion[]>([]);
+  const [localYosla, setLocalYosla] = useState<LocalYoslaPayload | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -34,10 +35,13 @@ export default function ExploreScreen() {
       if (!mounted) return;
       setLoading(true);
       const payload = await apiFetch('/explore?limit=50', {}, { requireAuth: true });
+      const localPayload = await apiFetch('/discovery/local-yosla?limit=6', {}, { requireAuth: true });
       const data = payload ? await payload.json() : null;
+      const localData = localPayload?.ok ? await localPayload.json() : null;
       if (!mounted) return;
       setTopics(Array.isArray(data?.topics) ? data.topics : []);
       setCreators(Array.isArray(data?.creators) ? data.creators : []);
+      setLocalYosla(localData);
       setLoading(false);
     };
     load();
@@ -65,6 +69,28 @@ export default function ExploreScreen() {
 
       <Text style={[styles.sectionTitle, isRTL && styles.textRight]}>Hashtagit</Text>
       {loading ? <ActivityIndicator color="#007AFF" style={{ marginBottom: 16 }} /> : null}
+      <View style={styles.localPanel}>
+        <View style={styles.localHeader}>
+          <View>
+            <Text style={styles.localKicker}>Local YOSLA</Text>
+            <Text style={styles.localTitle}>{localYosla?.region || 'Suomi'}</Text>
+          </View>
+          <Ionicons name="location" size={22} color="#dcfce7" />
+        </View>
+        <View style={styles.localTopicRow}>
+          {(localYosla?.topics || ['#suomi', '#fi', '#helsinki']).slice(0, 6).map((tag) => (
+            <Pressable key={tag} style={styles.localTopicPill} onPress={() => router.push({ pathname: '/search', params: { q: tag } })}>
+              <Text style={styles.localTopicText}>{tag}</Text>
+            </Pressable>
+          ))}
+        </View>
+        {(localYosla?.posts || []).slice(0, 3).map((post) => (
+          <Pressable key={post.post_id} style={styles.localPostRow} onPress={() => router.push(`/posts/${post.post_id}`)}>
+            <Text style={styles.localPostTitle} numberOfLines={1}>{post.title}</Text>
+            <Text style={styles.localPostMeta}>@{post.username || 'yosla'} · {post.topic}</Text>
+          </Pressable>
+        ))}
+      </View>
       <View style={styles.chipGrid}>
         {topicLabels.map((topic) => {
           const meta = topicMeta[topic] || { area: 'Aihe syötteessä', tone: '#2563eb', icon: 'pricetag' as const };
@@ -110,6 +136,16 @@ const styles = StyleSheet.create({
   title: { fontSize: 24, fontWeight: '800', color: '#111827', marginTop: 6, marginBottom: 8 },
   body: { fontSize: 15, lineHeight: 22, color: '#4b5563' },
   sectionTitle: { fontSize: 16, fontWeight: '800', color: '#111827', marginBottom: 10, marginTop: 4 },
+  localPanel: { backgroundColor: '#064e3b', borderRadius: 20, padding: 16, borderWidth: 1, borderColor: '#10b981', marginBottom: 16, gap: 10 },
+  localHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12 },
+  localKicker: { color: '#bbf7d0', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', letterSpacing: 0.6 },
+  localTitle: { color: '#fff', fontSize: 21, fontWeight: '900', marginTop: 3 },
+  localTopicRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  localTopicPill: { borderRadius: 999, backgroundColor: 'rgba(220,252,231,0.14)', borderWidth: 1, borderColor: 'rgba(220,252,231,0.25)', paddingHorizontal: 10, paddingVertical: 7 },
+  localTopicText: { color: '#dcfce7', fontSize: 12, fontWeight: '900' },
+  localPostRow: { borderRadius: 12, backgroundColor: 'rgba(15,23,42,0.28)', padding: 10 },
+  localPostTitle: { color: '#fff', fontSize: 13, fontWeight: '900' },
+  localPostMeta: { color: '#bbf7d0', fontSize: 11, fontWeight: '800', marginTop: 2 },
   chipGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 16 },
   topicBadge: {
     flexDirection: 'row',

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -14,18 +14,21 @@ import {
   Animated,
   useWindowDimensions,
   ScrollView,
-  Modal,
-  Share,
 } from 'react-native';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { Ionicons } from '@expo/vector-icons';
 import { VideoView, useVideoPlayer } from 'expo-video';
-import { useLocalSearchParams } from 'expo-router';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { formatRelativeTime, formatLocalDate } from '../../src/utils/time';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { buildDwellEvents, getVisiblePostIds, type FeedItem as DwellFeedItem, type Post, type Comment } from '../../src/features/feed/dwell';
 import { API_BASE } from '../../src/utils/api/http';
+import { liveSignalingSocket } from '../../src/realtime/live-signaling';
+import { formatCompactCount, formatReplayDate, formatReplayDuration, isLiveReplayPost } from '../../src/features/video/liveReplay';
+import { PostActionsButton, shareActionPost, type ActionablePost } from '../../src/features/postActions/PostActionsButton';
+import type { BreakingLivePayload, DailyTrendsPayload, LocalYoslaPayload } from '../../src/features/growth/growthTypes';
 
 const BACKEND_BASE = API_BASE.replace(/\/api$/, '');
 
@@ -45,6 +48,16 @@ type AdConfig = {
 
 type FeedItem = DwellFeedItem | { type: 'ad'; id: string; label: string };
 
+type ActiveLiveStream = {
+  roomId: string;
+  topic: string;
+  username: string;
+  profilePicture?: string | null;
+  count: number;
+  startedAt?: string;
+  breakingScore?: number;
+};
+
 type HotPostBadge = {
   icon: string;
   label: string;
@@ -59,25 +72,72 @@ const reactionOptions = [
   { key: 'rocket', emoji: '🚀', label: 'Nosto' },
 ];
 
-const liveChatSeed = [
-  '@mira: Mahtava aihe!',
-  '@arto: Kysymys hostille...',
-  '@sanna: Tämä näyttää hyvältä.',
-  '@toni: Voiko tästä tehdä Q&A:n?',
-  '@leena: 🔥🔥🔥',
-];
-
 const liveHosts = [
-  { id: 'live_1', name: 'YOSLA', topic: '#Luonto' },
-  { id: 'live_2', name: 'Studio FI', topic: '#build' },
-  { id: 'live_3', name: 'Creator Lab', topic: '#design' },
+  { id: 'live_1', name: 'YOSLA', topic: '#Luonto', viewers: 128, avatar: 'YO' },
+  { id: 'live_2', name: 'Studio FI', topic: '#build', viewers: 84, avatar: 'SF' },
+  { id: 'live_3', name: 'Creator Lab', topic: '#design', viewers: 42, avatar: 'CL' },
+  { id: 'live_4', name: 'Musiikki', topic: '#musiikki', viewers: 203, avatar: 'MU' },
+  { id: 'live_5', name: 'Kuvaajat', topic: '#valokuvaus', viewers: 61, avatar: 'KV' },
 ];
 
-const achievementBadges = [
-  { icon: 'ribbon', title: 'Perustajajäsen', value: 'Aktiivinen' },
-  { icon: 'chatbubbles', title: 'Viikon keskustelija', value: '12 vastausta' },
-  { icon: 'star', title: 'Suosittu kirjoittaja', value: '340 pistettä' },
+const matrixTrendingCards = [
+  {
+    rank: '#1',
+    tone: 'crimson',
+    label: 'KOVA UUTINEN',
+    title: 'Suomen talous 2026 - mitä tapahtuu?',
+    meta: '184 kommenttia',
+    signal: '🔥 Nousussa',
+    icon: 'flame' as const,
+  },
+  {
+    rank: '#2',
+    tone: 'indigo',
+    label: 'KOMETTI',
+    title: 'YOSLA julkaisi uuden ominaisuuden!',
+    meta: '91 kommenttia',
+    signal: '+200% viime 2h',
+    icon: 'sparkles' as const,
+  },
+  {
+    rank: '#3',
+    tone: 'blue',
+    label: 'ILMIÖ',
+    title: 'Kesän paras biisi - äänestä suosikkisi',
+    meta: '612 kommenttia',
+    signal: '🚀 Trendaa 3 yhteisössä',
+    icon: 'rocket' as const,
+  },
+  {
+    rank: '#4',
+    tone: 'green',
+    label: 'NOUSEVA KESKUSTELU',
+    title: 'Mikä on sinun tämän kesän kohokohta?',
+    meta: '72 kommenttia',
+    signal: '⭐ Uusia kommentteja',
+    icon: 'chatbubble-ellipses' as const,
+  },
 ] as const;
+
+const upcomingBroadcasts = [
+  { time: '14:00-16:00', title: 'Kehittäjiltä', host: 'Studio FI' },
+  { time: '19:00-20:00', title: 'Musiikkistudio', host: 'Live' },
+  { time: '21:30-22:00', title: 'Creator Q&A', host: 'YOSLA Lab' },
+];
+
+const popularCommunities = [
+  { tag: '#suomi', members: '18,2k' },
+  { tag: '#valokuvaus', members: '9,8k' },
+  { tag: '#teknologia', members: '7,4k' },
+  { tag: '#musiikki', members: '12,1k' },
+];
+
+const globalAchievements = [
+  { icon: 'ribbon-outline' as const, title: 'Perustajajäsen', value: 'Joined 2024' },
+  { icon: 'chatbubbles-outline' as const, title: 'Viikon keskustelija', value: 'Top 10%' },
+  { icon: 'heart-outline' as const, title: 'Suosittu kirjoittaja', value: '100+ tykkäystä' },
+  { icon: 'trophy-outline' as const, title: 'Kommenttimestari', value: '500+ kommenttia' },
+];
 
 const getPostBadge = (commentsCount = 0): HotPostBadge | null => {
   if (commentsCount >= 500) return { icon: '🚀', label: 'Ilmiö', tone: 'phenomenon' };
@@ -138,6 +198,7 @@ const moveHighlightedPostFirst = (items: LocalPost[], highlightedId?: string) =>
 };
 
 function FeedScreen() {
+  const router = useRouter();
   const params = useLocalSearchParams<{ highlightPostId?: string | string[] }>();
   const highlightPostId = Array.isArray(params.highlightPostId)
     ? params.highlightPostId[0]
@@ -154,17 +215,21 @@ function FeedScreen() {
   const [likeLoadingByPost, setLikeLoadingByPost] = useState<Record<string, boolean>>({});
   const [repostLoadingByPost, setRepostLoadingByPost] = useState<Record<string, boolean>>({});
   const [commentLoadingByPost, setCommentLoadingByPost] = useState<Record<string, boolean>>({});
+  const [hiddenPostIds, setHiddenPostIds] = useState<Set<string>>(new Set());
   const [followingByUserId, setFollowingByUserId] = useState<Record<string, boolean>>({});
   const [followLoadingByUserId, setFollowLoadingByUserId] = useState<Record<string, boolean>>({});
-  const [mutedByUserId, setMutedByUserId] = useState<Record<string, boolean>>({});
-  const [blockedByUserId, setBlockedByUserId] = useState<Record<string, boolean>>({});
   const [imageAspectByPostId, setImageAspectByPostId] = useState<Record<string, number>>({});
   const [reactionByPost, setReactionByPost] = useState<Record<string, string>>({});
   const [reactionCountsByPost, setReactionCountsByPost] = useState<Record<string, Record<string, number>>>({});
   const [savedByPost, setSavedByPost] = useState<Record<string, boolean>>({});
+  const [joinedCommunityTags, setJoinedCommunityTags] = useState<Record<string, boolean>>({});
   const [dailyVote, setDailyVote] = useState<'yes' | 'no' | null>(null);
-  const [activeLiveHost, setActiveLiveHost] = useState<typeof liveHosts[number] | null>(null);
-  const [liveChatMessages, setLiveChatMessages] = useState<string[]>(liveChatSeed.slice(0, 2));
+  const [liveViewerCounts, setLiveViewerCounts] = useState<Record<string, number>>({});
+  const [activeLiveStreams, setActiveLiveStreams] = useState<ActiveLiveStream[]>([]);
+  const [dailyTrends, setDailyTrends] = useState<DailyTrendsPayload | null>(null);
+  const [breakingLive, setBreakingLive] = useState<BreakingLivePayload | null>(null);
+  const [localYosla, setLocalYosla] = useState<LocalYoslaPayload | null>(null);
+  const [surpriseLoading, setSurpriseLoading] = useState(false);
   const [adConfig, setAdConfig] = useState<AdConfig>({
     placements: { in_feed: false, sidebar: false, interstitial: false },
     frequency: 5,
@@ -183,6 +248,7 @@ function FeedScreen() {
   const dwellFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendDwellEventRef = useRef<(postId: string, dwellMs: number) => Promise<void>>(async () => {});
   const flushVisibleDwellRef = useRef<() => Promise<void>>(async () => {});
+  const videoMilestonesByPostRef = useRef<Record<string, Set<string>>>({});
   const isNewUser = (user?.posts_count ?? 0) < 3 && (user?.followers_count ?? 0) === 0 && (user?.following_count ?? 0) <= 2;
   const isDesktop = width >= 768;
 
@@ -194,32 +260,186 @@ function FeedScreen() {
 
   const isVideoUrl = (uri?: string) => !!uri && /\.(mp4|mov|webm)(?:$|\?)/i.test(uri);
 
-  const hotPosts = useMemo(
-    () =>
-      posts
-        .map((post) => ({ post, badge: getPostBadge(post.comments_count || 0) }))
-        .filter((item): item is { post: LocalPost; badge: HotPostBadge } => !!item.badge)
-        .sort((a, b) => (b.post.comments_count || 0) - (a.post.comments_count || 0))
-        .slice(0, 4),
-    [posts]
-  );
-
-  const sharePost = async (post: LocalPost) => {
-    const path = `/posts/${post.post_id}`;
-    const url = Platform.OS === 'web' && typeof window !== 'undefined'
-      ? `${window.location.origin}${path}`
-      : path;
+  const sendVideoAnalytics = useCallback(async (postId: string, eventName: string, currentTime = 0, duration?: number, milestone?: number) => {
     try {
-      if (Platform.OS === 'web' && typeof navigator !== 'undefined' && navigator.clipboard) {
-        await navigator.clipboard.writeText(url);
-        Alert.alert('Jaettu', 'Linkki kopioitu leikepöydälle.');
-        return;
-      }
-      await Share.share({ message: `${post.text}\n${url}` });
+      await apiFetch(`/posts/${postId}/video-analytics`, {
+        method: 'POST',
+        body: JSON.stringify({
+          event: eventName,
+          current_time: currentTime,
+          duration,
+          milestone,
+        }),
+      });
     } catch (error) {
-      console.error('Error sharing post:', error);
-      Alert.alert(t('error'), 'Jakaminen ei onnistunut.');
+      console.warn('[video-analytics] feed tracking failed', { postId, eventName, error });
     }
+  }, [apiFetch]);
+
+  const markVideoMilestone = (postId: string, key: string) => {
+    const current = videoMilestonesByPostRef.current[postId] || new Set<string>();
+    if (current.has(key)) return false;
+    current.add(key);
+    videoMilestonesByPostRef.current[postId] = current;
+    return true;
+  };
+
+  const buildVideoDebugProps = (postId: string, src?: string) => Platform.OS === 'web'
+    ? {
+        onLoadedMetadata: (event: Event) => {
+          const video = event.currentTarget as HTMLVideoElement;
+          console.info('[video-playback] loadedmetadata', {
+            label: 'feed',
+            postId,
+            src,
+            duration: video.duration,
+            readyState: video.readyState,
+            networkState: video.networkState,
+          });
+        },
+        onError: (event: Event) => {
+          const video = event.currentTarget as HTMLVideoElement;
+          console.error('[video-playback] error', {
+            label: 'feed',
+            postId,
+            src,
+            currentTime: video.currentTime,
+            duration: video.duration,
+            readyState: video.readyState,
+            networkState: video.networkState,
+            errorCode: video.error?.code,
+            errorMessage: video.error?.message,
+          });
+        },
+        onPlaying: (event: Event) => {
+          const video = event.currentTarget as HTMLVideoElement;
+          if (markVideoMilestone(postId, 'start')) {
+            void sendVideoAnalytics(postId, 'start', video.currentTime, Number.isFinite(video.duration) ? video.duration : undefined);
+          }
+        },
+        onTimeUpdate: (event: Event) => {
+          const video = event.currentTarget as HTMLVideoElement;
+          if (!Number.isFinite(video.duration) || video.duration <= 0) return;
+          const percent = (video.currentTime / video.duration) * 100;
+          [25, 50, 75, 100].forEach((milestone) => {
+            if (percent >= milestone && markVideoMilestone(postId, String(milestone))) {
+              void sendVideoAnalytics(postId, String(milestone), video.currentTime, video.duration, milestone);
+            }
+          });
+        },
+        onEnded: (event: Event) => {
+          const video = event.currentTarget as HTMLVideoElement;
+          console.info('[video-playback] ended', {
+            label: 'feed',
+            postId,
+            src,
+            currentTime: video.currentTime,
+            duration: video.duration,
+            readyState: video.readyState,
+            networkState: video.networkState,
+          });
+          if (markVideoMilestone(postId, 'replay')) {
+            void sendVideoAnalytics(postId, 'replay', video.currentTime, Number.isFinite(video.duration) ? video.duration : undefined, 100);
+          }
+        },
+      }
+    : {};
+
+  const deletePostFromFeed = (postId: string) => {
+    setHiddenPostIds((current) => new Set(current).add(postId));
+    setPosts((current) => current.filter((post) => post.post_id !== postId));
+    setExpandedComments((current) => {
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+    setCommentInputs((current) => {
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+    setSavedByPost((current) => {
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+    setReactionByPost((current) => {
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+    setReactionCountsByPost((current) => {
+      const next = { ...current };
+      delete next[postId];
+      return next;
+    });
+  };
+
+  const updatePostInFeed = (updatedPost: Partial<LocalPost> & { post_id: string }) => {
+    setPosts((current) => current.map((post) => post.post_id === updatedPost.post_id ? { ...post, ...updatedPost } : post));
+  };
+
+  const editPostFromMenu = async (post: ActionablePost) => {
+    const currentText = post.text || post.title || '';
+    const submitEdit = async (value: string) => {
+      if (value.trim() === currentText.trim()) return;
+      try {
+        const response = await apiFetch(`/posts/${post.post_id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: value.trim() }),
+        });
+        if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+        const updated = await response.json();
+        updatePostInFeed(updated);
+        Alert.alert('YOSLA', 'Julkaisu päivitetty');
+      } catch (error) {
+        console.error('[post-actions] edit failed', { postId: post.post_id, error });
+        Alert.alert(t('error'), error instanceof Error ? error.message : 'Julkaisun muokkaus epäonnistui');
+      }
+    };
+    let nextText: string | null = null;
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      nextText = window.prompt('Muokkaa julkaisun tekstiä', currentText);
+    } else if (typeof (Alert as unknown as { prompt?: unknown }).prompt === 'function') {
+      (Alert as unknown as { prompt: (title: string, message?: string, callbackOrButtons?: unknown, type?: string, defaultValue?: string) => void }).prompt(
+        'Muokkaa julkaisua',
+        'Päivitä julkaisun teksti',
+        async (value: string) => {
+          await submitEdit(value);
+        },
+        'plain-text',
+        currentText
+      );
+      return;
+    } else {
+      Alert.alert('Muokkaus', 'Tämä laite ei tue tekstikenttää tässä pikavalikossa. Avaa julkaisu muokkausta varten.');
+      return;
+    }
+    if (nextText === null || nextText.trim() === currentText.trim()) return;
+    await submitEdit(nextText);
+  };
+
+  const deletePostFromMenu = async (post: ActionablePost) => {
+    const runDelete = async () => {
+      try {
+        const response = await apiFetch(`/posts/${post.post_id}`, { method: 'DELETE' });
+        if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+        deletePostFromFeed(post.post_id);
+        Alert.alert('YOSLA', 'Julkaisu poistettu');
+      } catch (error) {
+        console.error('[post-actions] delete failed', { postId: post.post_id, error });
+        Alert.alert(t('error'), error instanceof Error ? error.message : 'Julkaisun poisto epäonnistui');
+      }
+    };
+    if (Platform.OS === 'web') {
+      if (typeof window === 'undefined' || window.confirm('Poistetaanko julkaisu?')) void runDelete();
+      return;
+    }
+    Alert.alert('Poista julkaisu', 'Poistetaanko julkaisu pysyvästi?', [
+      { text: t('cancel'), style: 'cancel' },
+      { text: 'Poista', style: 'destructive', onPress: () => void runDelete() },
+    ]);
   };
 
   const toggleSavePost = async (post: LocalPost) => {
@@ -229,13 +449,18 @@ function FeedScreen() {
     setSavedByPost((prev) => ({ ...prev, [postId]: optimisticSaved }));
     setPosts((prev) => prev.map((item) => item.post_id === postId ? { ...item, is_bookmarked: optimisticSaved } : item));
     try {
-      const response = await apiFetch(`/posts/${postId}/bookmark`, { method: 'POST' });
+      const response = await apiFetch('/bookmarks/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ post_id: postId }),
+      });
       if (!response || !response.ok) {
         throw new Error(`Bookmark failed (${response?.status || 'network'})`);
       }
       const payload = await response.json();
       setSavedByPost((prev) => ({ ...prev, [postId]: !!payload.is_bookmarked }));
       setPosts((prev) => prev.map((item) => item.post_id === postId ? { ...item, is_bookmarked: !!payload.is_bookmarked } : item));
+      Alert.alert('Tallennetut', payload.is_bookmarked ? 'Julkaisu lisättiin kirjanmerkkeihin.' : 'Julkaisu poistettiin kirjanmerkeistä.');
     } catch (error) {
       console.error('Error toggling bookmark:', error);
       setSavedByPost((prev) => ({ ...prev, [postId]: previousSaved }));
@@ -245,8 +470,10 @@ function FeedScreen() {
   };
 
   const handleReaction = async (post: LocalPost, reactionKey: string) => {
+    if (likeLoadingByPost[post.post_id]) return;
     const previousReaction = reactionByPost[post.post_id] || post.user_reaction || null;
     const previousCounts = reactionCountsByPost[post.post_id] || post.reaction_counts || {};
+    setLikeLoadingByPost((prev) => ({ ...prev, [post.post_id]: true }));
     setReactionByPost((prev) => {
       setReactionCountsByPost((counts) => {
         const current = counts[post.post_id] || {};
@@ -285,6 +512,8 @@ function FeedScreen() {
       setReactionByPost((prev) => ({ ...prev, [post.post_id]: previousReaction || '' }));
       setReactionCountsByPost((prev) => ({ ...prev, [post.post_id]: previousCounts }));
       Alert.alert(t('error'), 'Reaktion tallennus ei onnistunut.');
+    } finally {
+      setLikeLoadingByPost((prev) => ({ ...prev, [post.post_id]: false }));
     }
   };
 
@@ -328,17 +557,44 @@ function FeedScreen() {
   };
 
   useEffect(() => {
-    if (!activeLiveHost) {
-      setLiveChatMessages(liveChatSeed.slice(0, 2));
-      return undefined;
-    }
-    let index = 2;
-    const intervalId = setInterval(() => {
-      setLiveChatMessages((current) => [...current.slice(-4), liveChatSeed[index % liveChatSeed.length]]);
-      index += 1;
-    }, 1800);
-    return () => clearInterval(intervalId);
-  }, [activeLiveHost]);
+    const handleViewerCount = (payload: { roomId?: unknown; count?: unknown }) => {
+      const roomId = String(payload.roomId || '');
+      const count = Number(payload.count);
+      if (!roomId || !Number.isFinite(count)) return;
+      setLiveViewerCounts((current) => ({ ...current, [roomId]: count }));
+      setActiveLiveStreams((current) =>
+        current.map((stream) => stream.roomId === roomId ? { ...stream, count } : stream)
+      );
+    };
+    const handleActiveStreams = (payload: { streams?: unknown }) => {
+      const streams = Array.isArray(payload.streams) ? payload.streams : [];
+      const nextStreams: ActiveLiveStream[] = [];
+      streams.forEach((stream) => {
+        if (!stream || typeof stream !== 'object') return;
+        const item = stream as Record<string, unknown>;
+        const roomId = String(item.roomId || '');
+        if (!roomId) return;
+        nextStreams.push({
+          roomId,
+          topic: String(item.topic || '#YOSLA'),
+          username: String(item.username || 'Live'),
+          profilePicture: typeof item.profilePicture === 'string' ? item.profilePicture : null,
+          count: Number(item.count || 0),
+          startedAt: typeof item.startedAt === 'string' ? item.startedAt : undefined,
+          breakingScore: Number(item.breakingScore || 0),
+        });
+      });
+      setActiveLiveStreams(nextStreams);
+      setBreakingLive((current) => current ? { ...current, streams: nextStreams, top: nextStreams[0] || null } : current);
+    };
+    liveSignalingSocket.on('live:viewer-count-update', handleViewerCount);
+    liveSignalingSocket.on('live:active-streams', handleActiveStreams);
+    liveSignalingSocket.emit('live:list-active', {});
+    return () => {
+      liveSignalingSocket.off('live:viewer-count-update', handleViewerCount);
+      liveSignalingSocket.off('live:active-streams', handleActiveStreams);
+    };
+  }, []);
 
   const handleRepost = async (post: LocalPost) => {
     if (repostLoadingByPost[post.post_id]) return;
@@ -371,6 +627,9 @@ function FeedScreen() {
     try {
       const response = await apiFetch(`/posts?following_only=${followingOnly ? 'true' : 'false'}`);
       const adResp = await apiFetch('/ads/config', {}, { requireAuth: false });
+      const trendsResp = await apiFetch('/growth/daily-trends?limit=8');
+      const breakingResp = await apiFetch('/live/breaking');
+      const localResp = await apiFetch('/discovery/local-yosla?limit=6');
       if (!response || response.status === 401) {
         setFeedError(true);
         setPosts([]);
@@ -379,7 +638,9 @@ function FeedScreen() {
 
       if (response.ok) {
         const data = await response.json();
-        const normalizedPosts = Array.isArray(data) ? (data as LocalPost[]) : [];
+        const normalizedPosts = Array.isArray(data)
+          ? (data as LocalPost[]).filter((post) => !hiddenPostIds.has(post.post_id))
+          : [];
         const orderedPosts = moveHighlightedPostFirst(normalizedPosts, highlightPostId);
         setFeedError(false);
         setPosts(orderedPosts);
@@ -429,6 +690,16 @@ function FeedScreen() {
             setInterstitialVisible(true);
           }
         }
+        if (trendsResp?.ok) {
+          const trendsPayload = await trendsResp.json();
+          setDailyTrends(trendsPayload);
+        }
+        if (breakingResp?.ok) {
+          setBreakingLive(await breakingResp.json());
+        }
+        if (localResp?.ok) {
+          setLocalYosla(await localResp.json());
+        }
       } else {
         const raw = await response.text();
         console.error('Feed fetch failed:', response.status, raw);
@@ -443,7 +714,7 @@ function FeedScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [followingOnly, highlightPostId, token, user?.user_id, apiFetch]);
+  }, [followingOnly, hiddenPostIds, highlightPostId, token, user?.user_id, apiFetch]);
 
   useEffect(() => {
     if (!adConfig.placements.interstitial || !adConfig.network_enabled) {
@@ -610,7 +881,7 @@ function FeedScreen() {
     }
   };
 
-  const reportPost = async (postId: string) => {
+  const reportPost = async (postId: string, reason: 'inappropriate' | 'music_copyright' = 'inappropriate') => {
     try {
       const response = await apiFetch('/reports', {
         method: 'POST',
@@ -620,8 +891,8 @@ function FeedScreen() {
         body: JSON.stringify({
           target_type: 'post',
           target_id: postId,
-          reason: 'inappropriate',
-          details: 'Reported from feed',
+          reason,
+          details: reason === 'music_copyright' ? 'Copyright/music report from feed' : 'Reported from feed',
         }),
       });
       if (!response || response.status === 401) return;
@@ -629,140 +900,10 @@ function FeedScreen() {
         const raw = await response.text();
         throw new Error(`Report failed (${response.status}): ${raw}`);
       }
-      Alert.alert(t('error'), t('feedReportSent'));
+      Alert.alert('YOSLA', reason === 'music_copyright' ? 'Tekijänoikeusilmoitus lähetetty.' : t('feedReportSent'));
     } catch (error) {
       console.error('Error reporting post:', error);
       Alert.alert(t('error'), t('feedReportFailed'));
-    }
-  };
-
-  const toggleMute = async (targetUserId: string) => {
-    try {
-      const response = await apiFetch(`/users/${targetUserId}/mute`, {
-        method: 'POST',
-      });
-      if (!response || response.status === 401) return;
-      if (!response.ok) {
-        const raw = await response.text();
-        throw new Error(`Mute toggle failed (${response.status}): ${raw}`);
-      }
-      const payload = await response.json();
-      const isMuted = !!payload?.is_muted;
-      setMutedByUserId((prev) => ({ ...prev, [targetUserId]: isMuted }));
-      if (isMuted) {
-        setPosts((prev) => prev.filter((p) => p.user_id !== targetUserId));
-      }
-      Alert.alert(t('error'), isMuted ? t('feedUserMuted') : t('feedUserUnmuted'));
-    } catch (error) {
-      console.error('Error toggling mute:', error);
-      Alert.alert(t('error'), t('feedMuteUpdateFailed'));
-    }
-  };
-
-  const toggleBlock = async (targetUserId: string) => {
-    try {
-      const response = await apiFetch(`/users/${targetUserId}/block`, {
-        method: 'POST',
-      });
-      if (!response || response.status === 401) return;
-      if (!response.ok) {
-        const raw = await response.text();
-        throw new Error(`Block toggle failed (${response.status}): ${raw}`);
-      }
-      const payload = await response.json();
-      const isBlocked = !!payload?.is_blocked;
-      setBlockedByUserId((prev) => ({ ...prev, [targetUserId]: isBlocked }));
-      if (isBlocked) {
-        setPosts((prev) => prev.filter((p) => p.user_id !== targetUserId));
-      }
-      Alert.alert(t('error'), isBlocked ? t('feedUserBlocked') : t('feedUserUnblocked'));
-    } catch (error) {
-      console.error('Error toggling block:', error);
-      Alert.alert(t('error'), t('feedBlockUpdateFailed'));
-    }
-  };
-
-  const openSafetyActions = (post: Post) => {
-    if (post.user_id === user?.user_id) return;
-    const isMuted = !!mutedByUserId[post.user_id];
-    const isBlocked = !!blockedByUserId[post.user_id];
-    Alert.alert(
-      t('feedOpenActions'),
-      `@${post.username}`,
-      [
-        { text: t('feedReportPost'), onPress: () => reportPost(post.post_id) },
-        { text: isMuted ? t('feedUnmuteUser') : t('feedMuteUser'), onPress: () => toggleMute(post.user_id) },
-        { text: isBlocked ? t('feedUnblockUser') : t('feedBlockUser'), style: 'destructive', onPress: () => toggleBlock(post.user_id) },
-        { text: t('cancel'), style: 'cancel' },
-      ]
-    );
-  };
-
-  const handleLike = async (post: Post) => {
-    const postId = post.post_id;
-    if (likeLoadingByPost[postId]) return;
-
-    setLikeLoadingByPost((prev) => ({ ...prev, [postId]: true }));
-
-    // Optimistic UI update
-    const optimisticIsLiked = !post.is_liked;
-    const optimisticLikesCount = post.is_liked
-      ? Math.max(0, post.likes_count - 1)
-      : post.likes_count + 1;
-
-    setPosts((prevPosts) =>
-      prevPosts.map((p) =>
-        p.post_id === postId
-          ? {
-              ...p,
-              is_liked: optimisticIsLiked,
-              likes_count: optimisticLikesCount,
-            }
-          : p
-      )
-    );
-
-    try {
-      const response = await apiFetch(`/posts/${postId}/like`, {
-        method: 'POST',
-      });
-      if (!response || response.status === 401) return;
-
-      if (!response.ok) {
-        throw new Error(`Like failed with status ${response.status}`);
-      }
-
-      const result = await response.json();
-      if (typeof result.is_liked === 'boolean' && typeof result.likes_count === 'number') {
-        setPosts((prevPosts) =>
-          prevPosts.map((p) =>
-            p.post_id === postId
-              ? {
-                  ...p,
-                  is_liked: result.is_liked,
-                  likes_count: result.likes_count,
-                }
-              : p
-          )
-        );
-      }
-    } catch (error) {
-      // Revert optimistic update
-      setPosts((prevPosts) =>
-        prevPosts.map((p) =>
-          p.post_id === postId
-            ? {
-                ...p,
-                is_liked: post.is_liked,
-                likes_count: post.likes_count,
-              }
-            : p
-        )
-      );
-      console.error('Error toggling like:', error);
-      Alert.alert(t('error'), t('feedLikeFailed'));
-    } finally {
-      setLikeLoadingByPost((prev) => ({ ...prev, [postId]: false }));
     }
   };
 
@@ -914,75 +1055,230 @@ function FeedScreen() {
     );
   };
 
+  const openLiveHost = (host: typeof liveHosts[number]) => {
+    setActiveLiveHost(host);
+    router.push({
+      pathname: '/live',
+      params: { roomId: host.id, topic: host.topic },
+    });
+  };
+
+  const openActiveLiveStream = (stream: ActiveLiveStream) => {
+    router.push({
+      pathname: '/live',
+      params: { roomId: stream.roomId, topic: stream.topic },
+    });
+  };
+
+  const openTrendingTopic = (title: string) => {
+    router.push({
+      pathname: '/search',
+      params: { q: title },
+    });
+  };
+
+  const openDiscoveryTarget = (target?: string) => {
+    if (!target) return;
+    router.push(target as never);
+  };
+
+  const handleSurpriseMe = async () => {
+    if (surpriseLoading) return;
+    setSurpriseLoading(true);
+    try {
+      const response = await apiFetch('/discovery/surprise-me');
+      if (!response?.ok) throw new Error(response ? await response.text() : 'No response');
+      const payload = await response.json();
+      openDiscoveryTarget(payload?.target);
+    } catch (error) {
+      console.error('[phase2] surprise-me failed', error);
+      Alert.alert(t('error'), 'Yllätysnostoa ei voitu avata juuri nyt.');
+    } finally {
+      setSurpriseLoading(false);
+    }
+  };
+
+  const joinCommunity = (tag: string) => {
+    setJoinedCommunityTags((current) => ({ ...current, [tag]: true }));
+    Alert.alert('Yhteisö', `Liityit yhteisöön ${tag}`);
+  };
+
   const renderLiveNowSection = () => (
     <View style={styles.liveNowSection}>
       <View style={[styles.sectionHeaderRow, isRTL && styles.rowReverse]}>
-        <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Livenä nyt</Text>
+        <Text style={[styles.feedSectionTitle, styles.lightSectionTitle, isRTL && styles.textRight]}>LIVENÄ NYT</Text>
         <Text style={styles.livePulseText}>LIVE</Text>
       </View>
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.liveScroller}>
         {liveHosts.map((host) => (
-          <TouchableOpacity key={host.id} style={styles.liveHostCard} onPress={() => setActiveLiveHost(host)}>
-            <View style={styles.liveAvatarRing}>
-              <Text style={styles.liveAvatarInitial}>{host.name.slice(0, 1)}</Text>
-              <View style={styles.liveBadge}>
-                <Text style={styles.liveBadgeText}>LIVE</Text>
+          <TouchableOpacity key={host.id} style={styles.liveHostCard} onPress={() => openLiveHost(host)}>
+            <LinearGradient colors={['#FF0000', '#FF0055']} style={styles.liveAvatarGradient}>
+              <View style={styles.liveAvatarRing}>
+                <Text style={styles.liveAvatarInitial}>{host.avatar}</Text>
+                <View style={styles.liveBadge}>
+                  <Text style={styles.liveBadgeText}>LIVE</Text>
+                </View>
               </View>
-            </View>
+            </LinearGradient>
             <Text style={styles.liveHostName} numberOfLines={1}>{host.name}</Text>
-            <Text style={styles.liveTopic} numberOfLines={1}>{host.topic}</Text>
-            <Text style={styles.liveViewerCount}>{host.id === 'live_1' ? 128 : host.id === 'live_2' ? 84 : 42} katsojaa</Text>
+            <Text style={styles.liveViewerCount}>{liveViewerCounts[host.id] ?? host.viewers} kats.</Text>
           </TouchableOpacity>
         ))}
       </ScrollView>
     </View>
   );
 
-  const renderDailyQuestion = () => {
-    const yesVotes = 63 + (dailyVote === 'yes' ? 1 : 0);
-    const noVotes = 37 + (dailyVote === 'no' ? 1 : 0);
-    const total = yesVotes + noVotes;
-    const yesPercent = Math.round((yesVotes / total) * 100);
-    const noPercent = 100 - yesPercent;
+  const renderActiveLiveCard = () => {
+    const stream = activeLiveStreams[0];
+    if (!stream) return null;
+    const profilePictureUri = stream.profilePicture?.startsWith('/uploads')
+      ? `${BACKEND_BASE}${stream.profilePicture}`
+      : stream.profilePicture || '';
     return (
-      <View style={styles.dailyQuestionCard}>
+      <TouchableOpacity
+        style={styles.activeLiveCard}
+        onPress={() => openActiveLiveStream(stream)}
+        accessibilityRole="button"
+        accessibilityLabel={`Avaa live-lähetys ${stream.username}`}
+      >
+        <LinearGradient colors={['#111827', '#020617']} style={styles.activeLiveGradient}>
+          <View style={styles.activeLiveTopRow}>
+            <View style={styles.activeLiveProfileRow}>
+              {profilePictureUri ? (
+                <Image source={{ uri: profilePictureUri }} style={styles.activeLiveAvatar} />
+              ) : (
+                <View style={styles.activeLiveAvatarFallback}>
+                  <Text style={styles.activeLiveAvatarText}>{stream.username.slice(0, 2).toUpperCase()}</Text>
+                </View>
+              )}
+              <View style={{ flex: 1 }}>
+                <Text style={styles.activeLiveUsername} numberOfLines={1}>{stream.username}</Text>
+                <Text style={styles.activeLiveTopic} numberOfLines={1}>{stream.topic}</Text>
+              </View>
+            </View>
+            <View style={styles.activeLiveBadge}>
+              <View style={styles.activeLivePulseDot} />
+              <Text style={styles.activeLiveBadgeText}>🔴 LIVE</Text>
+            </View>
+          </View>
+          <View style={styles.activeLiveBottomRow}>
+            <Text style={styles.activeLiveTitle}>Live käynnissä nyt</Text>
+            <Text style={styles.activeLiveCount}>{stream.count} katsojaa</Text>
+          </View>
+        </LinearGradient>
+      </TouchableOpacity>
+    );
+  };
+
+  const renderPhase2Discovery = () => {
+    const breaking = breakingLive?.top || activeLiveStreams.slice().sort((a, b) => (b.breakingScore || 0) - (a.breakingScore || 0))[0];
+    const localTopic = localYosla?.topics?.[0] || '#suomi';
+    const localCommunity = localYosla?.communities?.[0];
+    return (
+      <View style={[styles.phase2Grid, !isDesktop && styles.phase2GridMobile]}>
+        <TouchableOpacity
+          style={[styles.phase2Card, styles.breakingLiveCard]}
+          onPress={() => breaking ? openActiveLiveStream(breaking) : liveSignalingSocket.emit('live:list-active', {})}
+          accessibilityRole="button"
+          accessibilityLabel="Avaa Breaking Live"
+        >
+          <View style={styles.phase2IconRow}>
+            <View style={styles.phase2LiveDot} />
+            <Text style={styles.phase2Kicker}>Breaking Live</Text>
+          </View>
+          <Text style={styles.phase2Title} numberOfLines={2}>
+            {breaking ? `${breaking.topic} @${breaking.username}` : 'Ei aktiivista liveä juuri nyt'}
+          </Text>
+          <Text style={styles.phase2Meta}>
+            {breaking ? `${breaking.count} katsojaa · score ${Math.round(breaking.breakingScore || 0)}` : 'Päivitetään reaaliajassa'}
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.phase2Card, styles.surpriseCard]}
+          onPress={() => void handleSurpriseMe()}
+          disabled={surpriseLoading}
+          accessibilityRole="button"
+          accessibilityLabel="Surprise Me"
+        >
+          <View style={styles.phase2IconRow}>
+            <Ionicons name="shuffle" size={16} color="#0f172a" />
+            <Text style={[styles.phase2Kicker, styles.phase2KickerDark]}>Surprise Me</Text>
+          </View>
+          <Text style={[styles.phase2Title, styles.phase2TitleDark]}>Vie minut johonkin kiinnostavaan</Text>
+          <Text style={[styles.phase2Meta, styles.phase2MetaDark]}>{surpriseLoading ? 'Haetaan...' : 'Live, replay, trendi tai yhteisö'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.phase2Card, styles.localCard]}
+          onPress={() => router.push({ pathname: '/search', params: { q: localTopic } })}
+          accessibilityRole="button"
+          accessibilityLabel="Avaa Local YOSLA"
+        >
+          <View style={styles.phase2IconRow}>
+            <Ionicons name="location" size={16} color="#dcfce7" />
+            <Text style={styles.phase2Kicker}>Local YOSLA</Text>
+          </View>
+          <Text style={styles.phase2Title}>{localCommunity?.tag || localTopic}</Text>
+          <Text style={styles.phase2Meta}>{localCommunity ? `${localCommunity.members} paikallista signaalia` : 'Suomi ja lähiyhteisöt'}</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  };
+
+  const renderDailyQuestion = (embedded = false) => {
+    return (
+      <View style={[styles.dailyQuestionCard, embedded && styles.embeddedMatrixCard]}>
         <View style={[styles.sectionHeaderRow, isRTL && styles.rowReverse]}>
           <Text style={[styles.feedSectionTitle, styles.lightSectionTitle, isRTL && styles.textRight]}>Päivän kysymys</Text>
           <Ionicons name="flash" size={18} color="#facc15" />
         </View>
-        <Text style={[styles.dailyQuestionText, isRTL && styles.textRight]}>Poistaisitko TikTokin jos sait 150 €?</Text>
+        <Text style={[styles.dailyQuestionText, isRTL && styles.textRight]}>Poistaisitko TikTokin jos saisit 1000 €?</Text>
         <View style={[styles.dailyVoteRow, isRTL && styles.rowReverse]}>
           <TouchableOpacity
             style={[styles.dailyVoteButton, dailyVote === 'yes' && styles.dailyVoteButtonActive]}
             onPress={() => setDailyVote('yes')}
           >
-            <View style={[styles.dailyVoteFill, { width: `${yesPercent}%` }]} />
             <Text style={styles.dailyVoteText}>Kyllä</Text>
-            <Text style={styles.dailyVotePercent}>{yesPercent}%</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.dailyVoteButton, dailyVote === 'no' && styles.dailyVoteButtonActive]}
             onPress={() => setDailyVote('no')}
           >
-            <View style={[styles.dailyVoteFill, styles.dailyVoteFillNo, { width: `${noPercent}%` }]} />
             <Text style={styles.dailyVoteText}>En</Text>
-            <Text style={styles.dailyVotePercent}>{noPercent}%</Text>
           </TouchableOpacity>
         </View>
-        <Text style={styles.dailyVoteMeta}>{total} paikallista ääntä tässä sessiossa</Text>
+        <View style={styles.pollFooterRow}>
+          <Text style={styles.dailyVoteMeta}>1 234 ääntä</Text>
+          <Text style={styles.pollResultsLink}>Äänestä ja näe tulokset</Text>
+        </View>
       </View>
     );
   };
 
-  const renderWeeklyChallenge = () => (
-    <View style={styles.challengeCard}>
-      <View style={styles.challengeIconWrap}>
-        <Ionicons name="sparkles" size={20} color="#fff" />
-      </View>
-      <View style={{ flex: 1 }}>
+  const renderWeeklyChallenge = (embedded = false) => (
+    <View style={[styles.challengeCard, embedded && styles.embeddedMatrixCard]}>
+      <View style={styles.challengeTopRow}>
+        <View style={styles.challengeIconWrap}>
+          <Ionicons name="leaf" size={20} color="#fff" />
+        </View>
         <Text style={[styles.challengeKicker, isRTL && styles.textRight]}>Viikon yhteisöhaaste</Text>
-        <Text style={[styles.challengeTitle, isRTL && styles.textRight]}>Tämän viikon teema on #Luonto</Text>
-        <Text style={[styles.challengeBody, isRTL && styles.textRight]}>Jaa paras kuvasi tai videosi ja kerää YOSLA-pisteitä.</Text>
+      </View>
+      <Text style={[styles.challengeTitle, isRTL && styles.textRight]}>Tämän viikon teema on #Luonto - jaa paras kuvasi tai videosi!</Text>
+      <View style={styles.challengeBottomRow}>
+        <View style={styles.participantStack}>
+          {['MI', 'SA', 'TO'].map((initials, index) => (
+            <View key={initials} style={[styles.participantAvatar, { marginLeft: index === 0 ? 0 : -10 }]}>
+              <Text style={styles.participantAvatarText}>{initials}</Text>
+            </View>
+          ))}
+          <View style={[styles.participantAvatar, styles.participantMore, { marginLeft: -10 }]}>
+            <Text style={styles.participantAvatarText}>+128</Text>
+          </View>
+        </View>
+        <TouchableOpacity style={styles.challengeActionButton}>
+          <Text style={styles.challengeActionText}>Osallistu haasteeseen</Text>
+        </TouchableOpacity>
       </View>
     </View>
   );
@@ -990,118 +1286,107 @@ function FeedScreen() {
   const renderTrendingNow = () => (
     <View style={styles.trendingSection}>
       <View style={[styles.sectionHeaderRow, isRTL && styles.rowReverse]}>
-        <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Puhutuimmat juuri nyt</Text>
+        <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>DAILY TRENDS</Text>
         <Ionicons name="trending-up" size={18} color="#ef4444" />
       </View>
-      {hotPosts.length ? (
-        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.trendingScroller}>
-          {hotPosts.map(({ post, badge }) => (
-            <TouchableOpacity
-              key={post.post_id}
-              style={[styles.trendingCard, styles[`hotBadge_${badge.tone}`]]}
-              onPress={() => setExpandedComments((prev) => ({ ...prev, [post.post_id]: true }))}
-            >
-              <Text style={styles.trendingBadge}>{badge.icon} {badge.label}</Text>
-              <Text style={styles.trendingTitle} numberOfLines={2}>{post.text || `@${post.username}`}</Text>
-              <Text style={styles.trendingMeta}>@{post.username} · {post.comments_count || 0} kommenttia</Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
-      ) : (
-        <View style={styles.trendingEmptyCard}>
-          <Text style={styles.trendingEmptyTitle}>⭐ Nouseva keskustelu</Text>
-          <Text style={styles.trendingEmptyBody}>Kommentoi kiinnostavia julkaisuja, niin kuumimmat aiheet nousevat tähän.</Text>
-        </View>
-      )}
-    </View>
-  );
-
-  const renderPhenomenaPanel = () => (
-    <View style={styles.phenomenaPanel}>
-      <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Ilmiöt</Text>
-      {['#TikTok150', '#Luonto', '#CreatorLab'].map((item, index) => (
-        <View key={item} style={styles.phenomenonRow}>
-          <Text style={styles.phenomenonRank}>🚀 {index + 1}</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.phenomenonTag}>{item}</Text>
-            <Text style={styles.phenomenonMeta}>+{(index + 2) * 19}% vauhti viime tunnilla</Text>
-          </View>
-        </View>
-      ))}
-    </View>
-  );
-
-  const renderUpcomingStreams = () => (
-    <View style={styles.upcomingPanel}>
-      <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Tulevat striimit</Text>
-      {['AI suunnittelee yhteisön', 'Kuuma uutinen: somevero', 'Mediakisa finaali'].map((title, index) => (
-        <View key={title} style={styles.streamRow}>
-          <Text style={styles.streamTime}>{index === 0 ? '18:00' : index === 1 ? '20:30' : 'Huomenna'}</Text>
-          <Text style={styles.streamTitle}>{title}</Text>
-        </View>
-      ))}
-    </View>
-  );
-
-  const renderGamificationPanel = () => (
-    <View style={styles.gamificationPanel}>
-      <View style={[styles.sectionHeaderRow, isRTL && styles.rowReverse]}>
-        <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>Oma eteneminen</Text>
-        <View style={styles.pointsBadge}>
-          <Ionicons name="flash" size={14} color="#92400e" />
-          <Text style={styles.pointsBadgeText}>340 pistettä</Text>
-        </View>
-      </View>
-      <View style={styles.streakRow}>
-        <View style={styles.streakPill}>
-          <Text style={styles.streakValue}>3</Text>
-          <Text style={styles.streakLabel}>päivän putki</Text>
-        </View>
-        {achievementBadges.map((badge) => (
-          <View key={badge.title} style={styles.achievementBadge}>
-            <Ionicons name={badge.icon} size={16} color="#0f62fe" />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.achievementTitle} numberOfLines={1}>{badge.title}</Text>
-              <Text style={styles.achievementValue} numberOfLines={1}>{badge.value}</Text>
+      <View style={[styles.trendingGrid, !isDesktop && styles.mobileTrendingGrid]}>
+        {(dailyTrends?.posts?.length ? dailyTrends.posts.slice(0, 4).map((trend, index) => ({
+          rank: `#${index + 1}`,
+          tone: index === 0 ? 'crimson' : index === 1 ? 'indigo' : index === 2 ? 'blue' : 'green',
+          label: trend.type === 'live_recording' || trend.type === 'live_replay' ? 'LIVE REPLAY' : 'TRENDING',
+          title: trend.title,
+          meta: `${trend.comments_count} kommenttia`,
+          signal: `Score ${trend.score}`,
+          icon: (index === 0 ? 'flame' : index === 1 ? 'sparkles' : index === 2 ? 'rocket' : 'chatbubble-ellipses') as keyof typeof Ionicons.glyphMap,
+          postId: trend.post_id,
+        })) : matrixTrendingCards).map((card) => (
+          <TouchableOpacity
+            key={card.rank}
+            style={[styles.trendingCard, !isDesktop && styles.mobileTrendingCard, styles[`matrix_${card.tone}`]]}
+            onPress={() => 'postId' in card ? router.push(`/posts/${card.postId}`) : openTrendingTopic(card.title)}
+          >
+            <View style={styles.trendingCardTop}>
+              <Text style={styles.trendingRank}>{card.rank}</Text>
+              <Ionicons name={card.icon} size={17} color="#fff" />
             </View>
-          </View>
+            <Text style={styles.trendingBadge}>{card.label}</Text>
+            <Text style={styles.trendingTitle}>{card.title}</Text>
+            <Text style={styles.trendingMeta}>{card.meta} / {card.signal}</Text>
+          </TouchableOpacity>
         ))}
       </View>
     </View>
   );
 
-  const renderActiveLiveModal = () => (
-    <Modal visible={!!activeLiveHost} animationType="slide" onRequestClose={() => setActiveLiveHost(null)}>
-      <View style={styles.liveModal}>
-        <View style={styles.liveVideoShell}>
-          <Text style={styles.liveModalBadge}>LIVE</Text>
-          <Ionicons name="videocam" size={54} color="#fff" />
-          <Text style={styles.liveModalTitle}>{activeLiveHost?.name}</Text>
-          <Text style={styles.liveModalTopic}>{activeLiveHost?.topic} · aktiivinen stream-pohja</Text>
-          <View style={styles.floatingReactionOne}><Text style={styles.floatingReactionText}>🔥</Text></View>
-          <View style={styles.floatingReactionTwo}><Text style={styles.floatingReactionText}>🚀</Text></View>
-        </View>
-        <View style={styles.liveOverlayGrid}>
-          <View style={styles.liveChatPanel}>
-            <Text style={styles.livePanelTitle}>Live-chat</Text>
-            {liveChatMessages.map((message, index) => (
-              <Text key={`${message}-${index}`} style={styles.liveChatLine}>{message}</Text>
-            ))}
+  const renderEngagementWidgets = () => (
+    <View style={[styles.engagementGrid, !isDesktop && styles.mobileEngagementGrid]}>
+      {renderDailyQuestion(true)}
+      {renderWeeklyChallenge(true)}
+    </View>
+  );
+
+  const renderUpcomingStreams = () => (
+    <View style={styles.upcomingPanel}>
+      <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>TULEVAT LÄHETYKSET</Text>
+      {upcomingBroadcasts.map((item) => (
+        <View key={`${item.time}-${item.title}`} style={styles.streamRow}>
+          <Text style={styles.streamTime}>{item.time}</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.streamTitle}>{item.title}</Text>
+            <Text style={styles.streamHost}>{item.host}</Text>
           </View>
-          <View style={styles.liveSidePanel}>
-            <Text style={styles.livePanelTitle}>Q&A</Text>
-            <Text style={styles.liveChatLine}>Nosta parhaat kysymykset tähän.</Text>
-            <View style={styles.guestModeBox}>
-              <Ionicons name="person-add" size={18} color="#fff" />
-              <Text style={styles.guestModeText}>Vierastila valmiina</Text>
+        </View>
+      ))}
+    </View>
+  );
+
+  const renderPopularCommunities = () => (
+    <View style={styles.sidebarPanel}>
+      <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>SUOSITUT YHTEISÖT</Text>
+      {popularCommunities.map((community) => {
+        const isJoined = !!joinedCommunityTags[community.tag];
+        return (
+          <TouchableOpacity
+            key={community.tag}
+            style={styles.communityRow}
+            onPress={() => openTrendingTopic(community.tag)}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.communityTag}>{community.tag}</Text>
+              <Text style={styles.communityMembers}>{community.members} jäsentä</Text>
             </View>
+            <TouchableOpacity
+              style={[styles.joinButton, isJoined && styles.joinButtonJoined]}
+              onPress={(event) => {
+                event.stopPropagation();
+                if (!isJoined) joinCommunity(community.tag);
+              }}
+            >
+              <Text style={[styles.joinButtonText, isJoined && styles.joinButtonTextJoined]}>
+                {isJoined ? 'Liitytty' : 'Liity'}
+              </Text>
+            </TouchableOpacity>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
+  const renderAchievementsPanel = () => (
+    <View style={styles.sidebarPanel}>
+      <Text style={[styles.feedSectionTitle, isRTL && styles.textRight]}>SAAVUTUKSET</Text>
+      {globalAchievements.map((badge) => (
+        <View key={badge.title} style={styles.globalBadgeRow}>
+          <View style={styles.globalBadgeIcon}>
+            <Ionicons name={badge.icon} size={16} color="#0066FF" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.globalBadgeTitle}>{badge.title}</Text>
+            <Text style={styles.globalBadgeValue}>{badge.value}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.liveExitButton} onPress={() => setActiveLiveHost(null)}>
-          <Text style={styles.liveExitText}>Poistu</Text>
-        </TouchableOpacity>
-      </View>
-    </Modal>
+      ))}
+    </View>
   );
 
   const renderCommentNode = (comment: CommentNode, postId: string, depth = 0): React.ReactNode => {
@@ -1159,6 +1444,7 @@ function FeedScreen() {
     const reactionCounts = reactionCountsByPost[item.post_id] || item.reaction_counts || {};
     const isSaved = savedByPost[item.post_id] ?? !!item.is_bookmarked;
     const poll = item.poll;
+    const isLiveReplay = isLiveReplayPost(item);
     return (
     <Animated.View
       style={[
@@ -1227,14 +1513,17 @@ function FeedScreen() {
             <Text style={styles.notificationBadgeText}>{t('feedNotified')}</Text>
           </Animated.View>
         )}
-        {item.user_id !== user?.user_id && (
-          <View style={[styles.headerActions, isRTL && styles.rowReverse]}>
-            <TouchableOpacity
-              style={styles.moreButton}
-              onPress={() => openSafetyActions(item)}
-            >
-              <Ionicons name="ellipsis-horizontal" size={18} color="#666" />
-            </TouchableOpacity>
+        <View style={[styles.headerActions, isRTL && styles.rowReverse]}>
+          <PostActionsButton
+            post={item}
+            currentUserId={user?.user_id}
+            compact
+            onEdit={editPostFromMenu}
+            onDelete={deletePostFromMenu}
+            onHide={(post) => deletePostFromFeed(post.post_id)}
+            onReport={(post, reason) => void reportPost(post.post_id, reason)}
+          />
+          {item.user_id !== user?.user_id && (
             <TouchableOpacity
               style={[
                 styles.followButton,
@@ -1256,8 +1545,8 @@ function FeedScreen() {
                 </Text>
               )}
             </TouchableOpacity>
-          </View>
-        )}
+          )}
+        </View>
       </View>
 
       <Text style={[styles.postText, isRTL && styles.textRight]}>{item.text}</Text>
@@ -1271,6 +1560,21 @@ function FeedScreen() {
       {postBadge ? (
         <View style={[styles.hotPostBadge, styles[`hotBadge_${postBadge.tone}`]]}>
           <Text style={styles.hotPostBadgeText}>{postBadge.icon} {postBadge.label}</Text>
+        </View>
+      ) : null}
+      {item.music_risk && item.music_risk !== 'none' ? (
+        <View style={styles.musicWarningStrip}>
+          <Ionicons name="musical-notes-outline" size={14} color="#92400e" />
+          <Text style={styles.musicWarningText}>
+            Musiikkivaroitus: sisältö voi sisältää tekijänoikeuksilla suojattua ääntä.
+          </Text>
+        </View>
+      ) : null}
+      {isLiveReplay ? (
+        <View style={styles.liveReplayStrip}>
+          <Text style={styles.liveReplayBadge}>🔴 LIVE REPLAY</Text>
+          <Text style={styles.liveReplayMeta}>{formatReplayDuration(item.duration)} · {formatReplayDate(item.created_at)}</Text>
+          <Text style={styles.liveReplayMeta}>👁 {formatCompactCount(item.views)} · ❤️ {formatCompactCount(item.likes_count)} · 💬 {formatCompactCount(item.comments_count)} · 🔁 {formatCompactCount(item.replay_count)}</Text>
         </View>
       ) : null}
       {poll ? (
@@ -1295,30 +1599,7 @@ function FeedScreen() {
         </View>
       ) : null}
 
-      {item.image ? (
-        <View style={styles.postImageWrap}>
-          <Image
-            source={{ uri: resolveMediaUrl(item.image) }}
-            style={[
-              styles.postImage,
-              imageAspectByPostId[item.post_id]
-                ? { aspectRatio: imageAspectByPostId[item.post_id] }
-                : styles.postImageFallback,
-            ]}
-            onLoad={(event) => {
-              const { width, height } = event.nativeEvent.source;
-              if (!width || !height) return;
-              const aspectRatio = width / height;
-              setImageAspectByPostId((prev) =>
-                prev[item.post_id] === aspectRatio
-                  ? prev
-                  : { ...prev, [item.post_id]: aspectRatio }
-              );
-            }}
-            resizeMode="contain"
-          />
-        </View>
-      ) : item.video && isVideoUrl(item.video) ? (
+      {item.video && isVideoUrl(item.video) ? (
         <View style={styles.postVideoWrap}>
           {Platform.OS === 'web' ? (
             React.createElement('video', {
@@ -1326,6 +1607,8 @@ function FeedScreen() {
               controls: true,
               muted: true,
               playsInline: true,
+              poster: resolveMediaUrl(item.image),
+              ...buildVideoDebugProps(item.post_id, resolveMediaUrl(item.video)),
               style: {
                 width: 'auto',
                 maxWidth: '100%',
@@ -1340,6 +1623,32 @@ function FeedScreen() {
           ) : (
             <NativeFeedVideo uri={resolveMediaUrl(item.video) || item.video} />
           )}
+        </View>
+      ) : item.image ? (
+        <View style={styles.postImageWrap}>
+          <Image
+            source={{ uri: resolveMediaUrl(item.image) }}
+            style={[
+              styles.postImage,
+              imageAspectByPostId[item.post_id]
+                ? { aspectRatio: imageAspectByPostId[item.post_id] }
+                : styles.postImageFallback,
+            ]}
+            onLoad={(event) => {
+              const sourceSize = event.nativeEvent?.source;
+              const target = event.nativeEvent?.target as unknown as { naturalWidth?: number; naturalHeight?: number } | undefined;
+              const width = sourceSize?.width || target?.naturalWidth;
+              const height = sourceSize?.height || target?.naturalHeight;
+              if (!width || !height) return;
+              const aspectRatio = width / height;
+              setImageAspectByPostId((prev) =>
+                prev[item.post_id] === aspectRatio
+                  ? prev
+                  : { ...prev, [item.post_id]: aspectRatio }
+              );
+            }}
+            resizeMode="contain"
+          />
         </View>
       ) : null}
 
@@ -1393,7 +1702,7 @@ function FeedScreen() {
 
         <TouchableOpacity
           style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
-          onPress={() => void sharePost(item)}
+          onPress={() => void shareActionPost(item)}
         >
           <Ionicons name="share-social-outline" size={21} color="#666" />
         </TouchableOpacity>
@@ -1446,6 +1755,20 @@ function FeedScreen() {
     }
     return renderPost({ item: item.post });
   };
+
+  const renderMobileTopHeader = () => (
+    <View style={styles.mobileTopHeader}>
+      <Text style={styles.mobileBrandText}>YOSLA</Text>
+      <View style={[styles.mobileHeaderActions, isRTL && styles.rowReverse]}>
+        <TouchableOpacity style={styles.mobileHeaderIcon} accessibilityRole="button" accessibilityLabel={t('search')}>
+          <Ionicons name="search" size={20} color="#0F172A" />
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.mobileHeaderIcon} accessibilityRole="button" accessibilityLabel={t('messages')}>
+          <Ionicons name="chatbubble-ellipses-outline" size={20} color="#0F172A" />
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
 
   const renderIntroStack = () => (
     <>
@@ -1529,12 +1852,6 @@ function FeedScreen() {
       ) : null}
       {isDesktop ? (
         <View style={styles.desktopDashboard}>
-          <ScrollView style={styles.leftRail} contentContainerStyle={styles.railContent}>
-            {renderTrendingNow()}
-            {renderPhenomenaPanel()}
-            {renderWeeklyChallenge()}
-            {renderGamificationPanel()}
-          </ScrollView>
           <FlatList
             style={styles.centerFeed}
             data={feedItems}
@@ -1543,7 +1860,16 @@ function FeedScreen() {
             viewabilityConfig={{ itemVisiblePercentThreshold: 60, minimumViewTime: 300 }}
             onViewableItemsChanged={onViewableItemsChanged}
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-            ListHeaderComponent={renderIntroStack}
+            ListHeaderComponent={
+              <>
+                {renderActiveLiveCard()}
+                {renderPhase2Discovery()}
+                {renderLiveNowSection()}
+                {renderTrendingNow()}
+                {renderEngagementWidgets()}
+                {renderIntroStack()}
+              </>
+            }
             ListEmptyComponent={
               <View style={styles.emptyContainer}>
                 <Ionicons name={feedError ? 'cloud-offline-outline' : 'paper-plane-outline'} size={64} color="#fb7185" />
@@ -1553,9 +1879,9 @@ function FeedScreen() {
             }
           />
           <ScrollView style={styles.rightRail} contentContainerStyle={styles.railContent}>
-            {renderLiveNowSection()}
             {renderUpcomingStreams()}
-            {renderDailyQuestion()}
+            {renderPopularCommunities()}
+            {renderAchievementsPanel()}
           </ScrollView>
         </View>
       ) : (
@@ -1568,13 +1894,16 @@ function FeedScreen() {
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           ListHeaderComponent={
             <>
+              {renderMobileTopHeader()}
+              {renderActiveLiveCard()}
+              {renderPhase2Discovery()}
               {renderLiveNowSection()}
-              {renderDailyQuestion()}
               {renderTrendingNow()}
+              {renderDailyQuestion()}
+              {renderWeeklyChallenge()}
               {renderIntroStack()}
             </>
           }
-          ListFooterComponent={renderWeeklyChallenge}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
               <Ionicons name={feedError ? 'cloud-offline-outline' : 'paper-plane-outline'} size={64} color="#fb7185" />
@@ -1599,26 +1928,24 @@ export default FeedScreen;
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff7ed',
+    backgroundColor: '#F5F7FB',
   },
   desktopDashboard: {
     flex: 1,
     flexDirection: 'row',
-    gap: 14,
-    padding: 14,
-    backgroundColor: '#fff7ed',
-  },
-  leftRail: {
-    width: 286,
-    flexShrink: 0,
+    gap: 16,
+    padding: 18,
+    backgroundColor: '#F5F7FB',
+    justifyContent: 'center',
   },
   rightRail: {
-    width: 306,
+    width: 300,
     flexShrink: 0,
   },
   centerFeed: {
     flex: 1,
     minWidth: 0,
+    maxWidth: 700,
   },
   railContent: {
     gap: 12,
@@ -1627,18 +1954,209 @@ const styles = StyleSheet.create({
   mobileFeedContent: {
     paddingBottom: 18,
   },
-  liveNowSection: {
-    backgroundColor: '#1a0710',
-    borderWidth: 1,
-    borderColor: '#fb7185',
-    borderRadius: 18,
-    paddingTop: 12,
-    paddingBottom: 10,
+  mobileTopHeader: {
+    minHeight: 58,
     marginHorizontal: 12,
     marginTop: 10,
-    shadowColor: '#ef4444',
-    shadowOpacity: 0.22,
-    shadowRadius: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  mobileBrandText: {
+    color: '#0F172A',
+    fontSize: 28,
+    fontWeight: '900',
+  },
+  mobileHeaderActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  mobileHeaderIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5EAF2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  liveNowSection: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E5EAF2',
+    borderRadius: 8,
+    paddingTop: 14,
+    paddingBottom: 12,
+    marginHorizontal: 12,
+    marginTop: 12,
+    shadowColor: '#FF0055',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+  },
+  activeLiveCard: {
+    marginHorizontal: 12,
+    marginTop: 12,
+    borderRadius: 12,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#334155',
+    shadowColor: '#dc2626',
+    shadowOpacity: 0.24,
+    shadowRadius: 18,
+    elevation: 4,
+  },
+  activeLiveGradient: {
+    padding: 14,
+    gap: 16,
+  },
+  activeLiveTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  activeLiveProfileRow: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  activeLiveAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#1e293b',
+  },
+  activeLiveAvatarFallback: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#1d4ed8',
+  },
+  activeLiveAvatarText: {
+    color: '#fff',
+    fontWeight: '900',
+  },
+  activeLiveUsername: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '900',
+  },
+  activeLiveTopic: {
+    marginTop: 2,
+    color: '#93c5fd',
+    fontSize: 13,
+    fontWeight: '800',
+  },
+  activeLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderRadius: 999,
+    backgroundColor: 'rgba(220, 38, 38, 0.18)',
+    borderWidth: 1,
+    borderColor: '#ef4444',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  activeLivePulseDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#ef4444',
+  },
+  activeLiveBadgeText: {
+    color: '#fecaca',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  activeLiveBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  activeLiveTitle: {
+    color: '#e2e8f0',
+    fontSize: 20,
+    fontWeight: '900',
+  },
+  activeLiveCount: {
+    color: '#cbd5e1',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  phase2Grid: {
+    marginHorizontal: 12,
+    marginTop: 12,
+    flexDirection: 'row',
+    gap: 10,
+  },
+  phase2GridMobile: {
+    flexDirection: 'column',
+  },
+  phase2Card: {
+    flex: 1,
+    minHeight: 116,
+    borderRadius: 12,
+    padding: 14,
+    borderWidth: 1,
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  breakingLiveCard: {
+    backgroundColor: '#111827',
+    borderColor: '#ef4444',
+  },
+  surpriseCard: {
+    backgroundColor: '#facc15',
+    borderColor: '#eab308',
+  },
+  localCard: {
+    backgroundColor: '#064e3b',
+    borderColor: '#10b981',
+  },
+  phase2IconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  phase2LiveDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#ef4444',
+  },
+  phase2Kicker: {
+    color: '#f8fafc',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  phase2KickerDark: {
+    color: '#0f172a',
+  },
+  phase2Title: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 21,
+  },
+  phase2TitleDark: {
+    color: '#0f172a',
+  },
+  phase2Meta: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  phase2MetaDark: {
+    color: '#334155',
   },
   sectionHeaderRow: {
     flexDirection: 'row',
@@ -1648,16 +2166,16 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   feedSectionTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '900',
     color: '#111827',
   },
   lightSectionTitle: {
-    color: '#fff',
+    color: '#0F172A',
   },
   livePulseText: {
     color: '#fff',
-    backgroundColor: '#ef4444',
+    backgroundColor: '#FF0055',
     borderRadius: 999,
     paddingHorizontal: 9,
     paddingVertical: 4,
@@ -1666,40 +2184,46 @@ const styles = StyleSheet.create({
   },
   liveScroller: {
     paddingHorizontal: 12,
-    paddingTop: 10,
-    gap: 12,
+    paddingTop: 12,
+    gap: 16,
   },
   liveHostCard: {
-    width: 88,
+    width: 82,
     alignItems: 'center',
-    gap: 5,
+    gap: 6,
   },
-  liveAvatarRing: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    borderWidth: 3,
-    borderColor: '#ef4444',
-    backgroundColor: '#111827',
+  liveAvatarGradient: {
+    width: 66,
+    height: 66,
+    borderRadius: 33,
+    padding: 3,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: '#ef4444',
-    shadowOpacity: 0.28,
-    shadowRadius: 10,
-    elevation: 3,
+    shadowColor: '#FF0055',
+    shadowOpacity: 0.38,
+    shadowRadius: 14,
+  },
+  liveAvatarRing: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#F5F7FA',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   liveAvatarInitial: {
-    color: '#fff',
-    fontSize: 20,
+    color: '#0F172A',
+    fontSize: 16,
     fontWeight: '900',
   },
   liveBadge: {
     position: 'absolute',
-    bottom: -5,
-    borderRadius: 999,
-    backgroundColor: '#ef4444',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    bottom: -7,
+    alignSelf: 'center',
+    borderRadius: 3,
+    backgroundColor: '#FF0000',
+    paddingHorizontal: 7,
+    paddingVertical: 3,
   },
   liveBadgeText: {
     color: '#fff',
@@ -1707,40 +2231,33 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   liveHostName: {
-    color: '#fff',
+    color: '#0F172A',
     fontSize: 12,
     fontWeight: '800',
     maxWidth: 78,
   },
-  liveTopic: {
-    color: '#fecdd3',
-    fontSize: 11,
-    maxWidth: 78,
-  },
   liveViewerCount: {
-    color: '#fca5a5',
-    fontSize: 10,
+    color: '#64748B',
+    fontSize: 11,
     fontWeight: '900',
   },
   dailyQuestionCard: {
     marginHorizontal: 12,
-    marginTop: 10,
-    borderRadius: 18,
+    marginTop: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#a78bfa',
-    backgroundColor: '#312e81',
-    paddingVertical: 14,
-    shadowColor: '#7c3aed',
-    shadowOpacity: 0.18,
-    shadowRadius: 14,
+    borderColor: '#D8B4FE',
+    backgroundColor: '#8A2BE2',
+    paddingVertical: 16,
+    flex: 1,
   },
   dailyQuestionText: {
     color: '#fff',
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '900',
-    lineHeight: 24,
+    lineHeight: 26,
     paddingHorizontal: 12,
-    marginTop: 10,
+    marginTop: 12,
   },
   dailyVoteRow: {
     flexDirection: 'row',
@@ -1750,12 +2267,13 @@ const styles = StyleSheet.create({
   },
   dailyVoteButton: {
     flex: 1,
-    minHeight: 44,
-    borderRadius: 13,
+    minHeight: 46,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.24)',
-    backgroundColor: 'rgba(255,255,255,0.1)',
+    borderColor: 'rgba(255,255,255,0.28)',
+    backgroundColor: 'rgba(255,255,255,0.12)',
     overflow: 'hidden',
+    alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 10,
   },
@@ -1763,128 +2281,186 @@ const styles = StyleSheet.create({
     borderColor: '#facc15',
     backgroundColor: 'rgba(250,204,21,0.16)',
   },
-  dailyVoteFill: {
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(34,197,94,0.32)',
-  },
-  dailyVoteFillNo: {
-    backgroundColor: 'rgba(239,68,68,0.32)',
-  },
   dailyVoteText: {
     color: '#fff',
     fontSize: 14,
     fontWeight: '900',
   },
-  dailyVotePercent: {
-    position: 'absolute',
-    right: 10,
-    color: '#fff',
-    fontSize: 13,
-    fontWeight: '900',
-  },
   dailyVoteMeta: {
     color: '#ddd6fe',
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '800',
-    marginTop: 8,
+  },
+  pollFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginTop: 12,
     paddingHorizontal: 12,
+  },
+  pollResultsLink: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
   },
   challengeCard: {
     marginHorizontal: 12,
-    marginTop: 10,
-    borderRadius: 16,
+    marginTop: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#fed7aa',
-    backgroundColor: '#fff7ed',
-    padding: 14,
+    borderColor: '#FF6600',
+    backgroundColor: '#FF6600',
+    padding: 16,
+    gap: 12,
+    flex: 1,
+  },
+  challengeTopRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    gap: 10,
   },
   challengeIconWrap: {
     width: 42,
     height: 42,
     borderRadius: 21,
-    backgroundColor: '#ea580c',
+    backgroundColor: '#FF6600',
     alignItems: 'center',
     justifyContent: 'center',
   },
   challengeKicker: {
-    color: '#9a3412',
+    color: '#FFFFFF',
     fontSize: 11,
     fontWeight: '900',
     textTransform: 'uppercase',
   },
   challengeTitle: {
-    color: '#111827',
-    fontSize: 16,
+    color: '#FFFFFF',
+    fontSize: 18,
     fontWeight: '900',
-    marginTop: 2,
+    lineHeight: 24,
   },
-  challengeBody: {
-    color: '#7c2d12',
-    fontSize: 13,
-    marginTop: 2,
-    lineHeight: 18,
-  },
-  trendingSection: {
-    marginTop: 10,
-    backgroundColor: '#fff',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#fed7aa',
-    paddingVertical: 12,
-  },
-  trendingScroller: {
-    paddingHorizontal: 12,
-    paddingTop: 10,
+  challengeBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: 10,
   },
-  trendingCard: {
-    width: 230,
-    borderWidth: 1,
-    borderRadius: 16,
-    padding: 12,
-    gap: 6,
+  participantStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  participantAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    borderWidth: 2,
+    borderColor: '#fff',
+    backgroundColor: '#111827',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  participantMore: {
+    width: 46,
+    backgroundColor: '#FF6600',
+  },
+  participantAvatarText: {
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  challengeActionButton: {
+    minHeight: 42,
+    borderRadius: 8,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  challengeActionText: {
+    color: '#FF6600',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  trendingSection: {
+    marginTop: 12,
+    marginHorizontal: 12,
     backgroundColor: '#fff',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingVertical: 14,
+  },
+  trendingGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    paddingHorizontal: 12,
+    paddingTop: 12,
+    gap: 12,
+  },
+  mobileTrendingGrid: {
+    flexDirection: 'column',
+    flexWrap: 'nowrap',
+  },
+  trendingCard: {
+    flex: 1,
+    flexBasis: 180,
+    minWidth: 170,
+    minHeight: 150,
+    borderRadius: 8,
+    padding: 14,
+    gap: 8,
+  },
+  mobileTrendingCard: {
+    flexBasis: undefined,
+    minWidth: 0,
+    width: '100%',
+  },
+  trendingCardTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  trendingRank: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: '900',
   },
   trendingBadge: {
     fontSize: 12,
     fontWeight: '900',
-    color: '#111827',
+    color: 'rgba(255,255,255,0.88)',
   },
   trendingTitle: {
-    color: '#111827',
-    fontSize: 14,
-    fontWeight: '800',
-    lineHeight: 19,
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: '900',
+    lineHeight: 21,
   },
   trendingMeta: {
-    color: '#64748b',
+    color: 'rgba(255,255,255,0.86)',
     fontSize: 12,
-    fontWeight: '700',
+    fontWeight: '800',
+    marginTop: 'auto',
   },
-  trendingEmptyCard: {
+  matrix_crimson: { backgroundColor: '#FF0055' },
+  matrix_indigo: { backgroundColor: '#8A2BE2' },
+  matrix_blue: { backgroundColor: '#0066FF' },
+  matrix_green: { backgroundColor: '#047857' },
+  engagementGrid: {
+    flexDirection: 'row',
+    alignItems: 'stretch',
+    gap: 12,
     marginHorizontal: 12,
-    marginTop: 10,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#e5e7eb',
-    backgroundColor: '#fff',
-    padding: 14,
+    marginTop: 12,
   },
-  trendingEmptyTitle: {
-    color: '#111827',
-    fontWeight: '900',
-    marginBottom: 3,
+  mobileEngagementGrid: {
+    flexDirection: 'column',
   },
-  trendingEmptyBody: {
-    color: '#64748b',
-    fontSize: 13,
-    lineHeight: 18,
+  embeddedMatrixCard: {
+    marginHorizontal: 0,
+    marginTop: 0,
   },
   hotBadge_phenomenon: {
     backgroundColor: '#ecfccb',
@@ -1949,33 +2525,123 @@ const styles = StyleSheet.create({
   },
   upcomingPanel: {
     marginHorizontal: 12,
-    marginTop: 10,
-    borderRadius: 18,
+    marginTop: 12,
+    borderRadius: 8,
     borderWidth: 1,
-    borderColor: '#93c5fd',
-    backgroundColor: '#eff6ff',
+    borderColor: '#D8E2F0',
+    backgroundColor: '#fff',
     padding: 14,
-    gap: 10,
+    gap: 12,
   },
   streamRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    borderRadius: 13,
-    backgroundColor: '#fff',
-    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 11,
   },
   streamTime: {
-    color: '#1d4ed8',
-    fontSize: 12,
+    color: '#fff',
+    backgroundColor: '#0F62FE',
+    borderRadius: 6,
+    overflow: 'hidden',
+    fontSize: 11,
     fontWeight: '900',
-    minWidth: 58,
+    minWidth: 78,
+    textAlign: 'center',
+    paddingVertical: 5,
   },
   streamTitle: {
-    flex: 1,
     color: '#111827',
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '900',
+  },
+  streamHost: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  sidebarPanel: {
+    marginHorizontal: 12,
+    marginTop: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#D8E2F0',
+    backgroundColor: '#fff',
+    padding: 14,
+    gap: 12,
+  },
+  communityRow: {
+    alignItems: 'stretch',
+    gap: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#EEF2F7',
+    paddingBottom: 10,
+  },
+  communityTag: {
+    color: '#111827',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  communityMembers: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 2,
+  },
+  joinButton: {
+    borderRadius: 8,
+    backgroundColor: '#0066FF',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  joinButtonJoined: {
+    backgroundColor: '#E0F2FE',
+    borderWidth: 1,
+    borderColor: '#7DD3FC',
+  },
+  joinButtonText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  joinButtonTextJoined: {
+    color: '#075985',
+  },
+  globalBadgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 10,
+  },
+  globalBadgeIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: '#EFF6FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  globalBadgeTitle: {
+    color: '#111827',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  globalBadgeValue: {
+    color: '#64748B',
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 1,
   },
   pointsBadge: {
     flexDirection: 'row',
@@ -2645,6 +3311,47 @@ const styles = StyleSheet.create({
     color: '#111827',
     fontSize: 12,
     fontWeight: '900',
+  },
+  musicWarningStrip: {
+    alignSelf: 'stretch',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 12,
+    backgroundColor: '#fffbeb',
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    marginBottom: 10,
+  },
+  musicWarningText: {
+    flex: 1,
+    color: '#92400e',
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  liveReplayStrip: {
+    alignSelf: 'stretch',
+    borderWidth: 1,
+    borderColor: 'rgba(220, 38, 38, 0.22)',
+    backgroundColor: '#0f172a',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    gap: 3,
+    marginBottom: 10,
+  },
+  liveReplayBadge: {
+    color: '#fecaca',
+    fontSize: 11,
+    fontWeight: '900',
+  },
+  liveReplayMeta: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    fontWeight: '800',
   },
   pollCard: {
     borderWidth: 1,

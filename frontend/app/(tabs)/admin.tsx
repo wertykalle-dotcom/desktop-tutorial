@@ -1,11 +1,27 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity, TextInput, Alert, ActivityIndicator, Image } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
+import * as ImagePicker from 'expo-image-picker';
+import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../../src/contexts/AuthContext';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useAdminDashboardData, type AdminAdSettings, type AdminQueueItem } from '../../src/hooks/useAdminDashboardData';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { ROLE_OPTIONS, isSuperAdmin, type RoleKey } from '../../src/utils/roles';
+import { BACKEND_BASE } from '../../src/utils/api/http';
+
+const fundingTiers = [
+  { id: 'launch', label: 'Taso 1', amount: 75000, title: 'Lanseeraus' },
+  { id: 'mobile', label: 'Taso 2', amount: 100000, title: 'Mobiiliskaalaus' },
+  { id: 'national', label: 'Taso 3', amount: 250000, title: 'Valtakunnallinen laajennus' },
+];
+
+const editorTools: { icon: keyof typeof Ionicons.glyphMap; label: string }[] = [
+  { icon: 'text', label: 'Teksti' },
+  { icon: 'list', label: 'Lista' },
+  { icon: 'chatbox-ellipses-outline', label: 'Lainaus' },
+  { icon: 'link', label: 'Linkki' },
+];
 
 export default function AdminScreen() {
   const { user, token, updateUser } = useAuth();
@@ -24,6 +40,7 @@ export default function AdminScreen() {
     exchangeRatesUpdatedAt,
     systemOverview,
     moderationSettings,
+    moderationAnalytics,
     setAdSettings,
     setExchangeRatesText,
     setModerationSettings,
@@ -50,10 +67,15 @@ export default function AdminScreen() {
   const [savingRole, setSavingRole] = useState(false);
   const [campaignName, setCampaignName] = useState('');
   const [campaignAssetUrl, setCampaignAssetUrl] = useState('');
+  const [campaignAssetType, setCampaignAssetType] = useState<'image' | 'video'>('image');
+  const [campaignVideoUrl, setCampaignVideoUrl] = useState('');
+  const [campaignDescription, setCampaignDescription] = useState('');
   const [campaignCurrency, setCampaignCurrency] = useState('EUR');
   const [campaignTargeting, setCampaignTargeting] = useState('');
-  const [campaignBudget, setCampaignBudget] = useState('0');
+  const [campaignBudget, setCampaignBudget] = useState('75000');
+  const [selectedFundingTierId, setSelectedFundingTierId] = useState('launch');
   const [campaignPlacements, setCampaignPlacements] = useState('in_feed');
+  const [campaignAssetUploading, setCampaignAssetUploading] = useState(false);
   const [nukeTargetUserId, setNukeTargetUserId] = useState('');
   const exchangeRates = useMemo(() => {
     try {
@@ -152,26 +174,97 @@ export default function AdminScreen() {
     }
   };
 
+  const selectedFundingTier = fundingTiers.find((tier) => tier.id === selectedFundingTierId) || fundingTiers[0];
+  const campaignGoalProgress = Math.min(100, Math.max(8, (Number(campaignBudget || selectedFundingTier.amount) / 250000) * 100));
+  const campaignPreviewAssetUrl = campaignAssetUrl.startsWith('/uploads') ? `${BACKEND_BASE}${campaignAssetUrl}` : campaignAssetUrl;
+
+  const selectFundingTier = (tier: typeof fundingTiers[number]) => {
+    setSelectedFundingTierId(tier.id);
+    setCampaignBudget(String(tier.amount));
+  };
+
+  const uploadCampaignAsset = async (uri: string, typeHint: 'image' | 'video') => {
+    setCampaignAssetUploading(true);
+    try {
+      const uriParts = uri.split('/');
+      let name = uriParts[uriParts.length - 1] || (typeHint === 'video' ? 'campaign-video.mp4' : 'campaign-image.jpg');
+      if (typeHint === 'video' && !name.match(/\.(mp4|mov|webm)$/i)) name = `${name}.mp4`;
+      if (typeHint === 'image' && !name.match(/\.(jpg|jpeg|png|webp)$/i)) name = `${name}.jpg`;
+      let mimeType = typeHint === 'video' ? 'video/mp4' : 'image/jpeg';
+      if (name.toLowerCase().endsWith('.mov')) mimeType = 'video/quicktime';
+      if (name.toLowerCase().endsWith('.webm')) mimeType = 'video/webm';
+      if (name.toLowerCase().endsWith('.png')) mimeType = 'image/png';
+      if (name.toLowerCase().endsWith('.webp')) mimeType = 'image/webp';
+
+      const formData = new FormData();
+      // @ts-ignore - React Native FormData file
+      formData.append('asset', { uri, name, type: mimeType });
+      const response = await apiFetch('/admin/ads/campaign-asset', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response || !response.ok) throw new Error('Campaign asset upload failed');
+      const payload = await response.json();
+      setCampaignAssetUrl(payload.asset_url || '');
+      setCampaignAssetType(payload.asset_type === 'video' ? 'video' : 'image');
+    } finally {
+      setCampaignAssetUploading(false);
+    }
+  };
+
+  const pickCampaignAsset = async (typeHint: 'image' | 'video') => {
+    try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        Alert.alert(t('error'), t('createGalleryPermissionBody'));
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: typeHint === 'video' ? ['videos'] : ['images'],
+        allowsEditing: typeHint === 'image',
+        aspect: [16, 9],
+        quality: 0.8,
+      });
+      const asset = !result.canceled ? result.assets?.[0] : null;
+      if (asset?.uri) {
+        await uploadCampaignAsset(asset.uri, typeHint);
+      }
+    } catch (error: any) {
+      Alert.alert(t('error'), error?.message || 'Campaign asset upload failed');
+    }
+  };
+
   const createCampaign = async () => {
     try {
-          const response = await apiFetch('/admin/ads/campaigns', {
+      const targetingPayload = campaignTargeting.trim() ? JSON.parse(campaignTargeting) : {};
+      const response = await apiFetch('/admin/ads/campaigns', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: campaignName.trim(),
-          asset_url: campaignAssetUrl.trim() || null,
-          asset_type: 'image',
+          asset_url: (campaignVideoUrl.trim() || campaignAssetUrl.trim()) || null,
+          asset_type: campaignVideoUrl.trim() ? 'video' : campaignAssetType,
           currency: campaignCurrency.trim() || 'EUR',
-          targeting: campaignTargeting.trim() ? JSON.parse(campaignTargeting) : {},
-          budget: Number(campaignBudget || 0),
+          targeting: {
+            ...targetingPayload,
+            description: campaignDescription.trim(),
+            video_url: campaignVideoUrl.trim() || null,
+            funding_tier: selectedFundingTier,
+          },
+          budget: Number(campaignBudget || selectedFundingTier.amount),
           placements: campaignPlacements.split(',').map((item) => item.trim()).filter(Boolean),
         }),
       });
       if (!response || !response.ok) throw new Error(t('adminCampaignCreateFailed'));
       setCampaignName('');
       setCampaignAssetUrl('');
+      setCampaignAssetType('image');
+      setCampaignVideoUrl('');
+      setCampaignDescription('');
       setCampaignCurrency('EUR');
       setCampaignTargeting('');
+      setCampaignBudget('75000');
+      setSelectedFundingTierId('launch');
       await loadAdminData();
     } catch (error: any) {
       Alert.alert(t('error'), error?.message || t('adminCampaignCreateFailed'));
@@ -314,6 +407,33 @@ export default function AdminScreen() {
           <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminAdsEnabled')}: {systemOverview?.ads_enabled_count ?? 0}</Text>
           <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminSystemLogs')}: {systemOverview?.system_logs_count ?? 0}</Text>
           <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminAuditLogs')}: {systemOverview?.audit_logs_count ?? 0}</Text>
+        </View>
+
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Moderation Analytics</Text>
+          <View style={styles.healthRow}>
+            <View style={styles.healthPill}>
+              <Text style={styles.healthPillLabel}>Copyright</Text>
+              <Text style={styles.healthPillValue}>{moderationAnalytics?.copyright_reports_today ?? 0}</Text>
+            </View>
+            <View style={styles.healthPill}>
+              <Text style={styles.healthPillLabel}>Music</Text>
+              <Text style={styles.healthPillValue}>{moderationAnalytics?.music_reports_today ?? 0}</Text>
+            </View>
+            <View style={styles.healthPill}>
+              <Text style={styles.healthPillLabel}>Trust</Text>
+              <Text style={styles.healthPillValue}>{moderationAnalytics?.trust_events_today ?? 0}</Text>
+            </View>
+          </View>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>Pending: {moderationAnalytics?.pending_count ?? queue.length}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>Reviewed: {moderationAnalytics?.reviewed_count ?? 0}</Text>
+          <Text style={[styles.meta, isRTL && styles.textRight]}>Repeat offenders: {moderationAnalytics?.repeat_offenders?.length ?? 0}</Text>
+          {(moderationAnalytics?.repeat_offenders || []).slice(0, 3).map((item) => (
+            <View key={item.user_id} style={styles.queueItem}>
+              <Text style={[styles.queueTitle, isRTL && styles.textRight]}>{item.user_id}</Text>
+              <Text style={[styles.meta, isRTL && styles.textRight]}>Reports: {item.count} · {item.latest_reason || t('adminNoData')}</Text>
+            </View>
+          ))}
         </View>
 
         <View style={styles.card}>
@@ -500,34 +620,145 @@ export default function AdminScreen() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>{t('adminCampaigns')}</Text>
-          <TextInput style={styles.input} placeholder={t('adminCampaignNamePlaceholder')} value={campaignName} onChangeText={setCampaignName} />
-          <TextInput style={styles.input} placeholder={t('adminAssetUrlPlaceholder')} value={campaignAssetUrl} onChangeText={setCampaignAssetUrl} />
-          <TextInput style={styles.input} placeholder={t('adminCurrencyPlaceholder')} value={campaignCurrency} onChangeText={setCampaignCurrency} />
+        <View style={styles.campaignStudio}>
+          <Text style={styles.campaignEyebrow}>Campaign Studio</Text>
+          <Text style={styles.campaignTitle}>{t('adminCampaigns')}</Text>
+          <Text style={styles.campaignIntro}>Rakenna kampanja, määritä rahoitustasot ja tarkista backer-näkymä ennen julkaisua.</Text>
+
+          <View style={styles.mediaDropzone}>
+            <View style={styles.mediaIcon}>
+              {campaignAssetUploading ? (
+                <ActivityIndicator color="#60a5fa" />
+              ) : (
+                <Ionicons name="cloud-upload-outline" size={26} color="#60a5fa" />
+              )}
+            </View>
+            <Text style={styles.mediaTitle}>Media Dropzone</Text>
+            <Text style={styles.mediaCopy}>Valitse korkearesoluutioinen kampanjakuva tai lyhyt looppaava video.</Text>
+            <View style={styles.mediaActions}>
+              <TouchableOpacity style={styles.mediaButton} onPress={() => pickCampaignAsset('image')} disabled={campaignAssetUploading}>
+                <Ionicons name="image-outline" size={16} color="#dbeafe" />
+                <Text style={styles.mediaButtonText}>Kuva</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.mediaButton} onPress={() => pickCampaignAsset('video')} disabled={campaignAssetUploading}>
+                <Ionicons name="videocam-outline" size={16} color="#dbeafe" />
+                <Text style={styles.mediaButtonText}>Video</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Kampanjan nimi</Text>
+            <TextInput style={styles.campaignInput} placeholder="YOSLA kasvurahoitus" placeholderTextColor="#64748b" value={campaignName} onChangeText={setCampaignName} />
+          </View>
+          <View style={styles.formGroup}>
+            <Text style={styles.formLabel}>Kampanja-videon osoite</Text>
+            <TextInput
+              style={styles.campaignInput}
+              placeholder="https://.../campaign-loop.mp4"
+              placeholderTextColor="#64748b"
+              value={campaignVideoUrl}
+              onChangeText={(value) => {
+                setCampaignVideoUrl(value);
+                if (value.trim()) setCampaignAssetType('video');
+              }}
+              autoCapitalize="none"
+            />
+          </View>
+
+          <View style={styles.formRow}>
+            <View style={styles.formRowItem}>
+              <Text style={styles.formLabel}>Valuutta</Text>
+              <TextInput style={styles.campaignInput} placeholder="EUR" placeholderTextColor="#64748b" value={campaignCurrency} onChangeText={setCampaignCurrency} />
+            </View>
+            <View style={styles.formRowItem}>
+              <Text style={styles.formLabel}>Sijoittelut</Text>
+              <TextInput style={styles.campaignInput} placeholder="in_feed" placeholderTextColor="#64748b" value={campaignPlacements} onChangeText={setCampaignPlacements} />
+            </View>
+          </View>
+
+          <View style={styles.tiersPanel}>
+            <View style={styles.tiersHeader}>
+              <Text style={styles.tiersTitle}>Rahoitustavoitteet</Text>
+              <Text style={styles.tiersAmount}>{Number(campaignBudget || selectedFundingTier.amount).toLocaleString('fi-FI')} €</Text>
+            </View>
+            {fundingTiers.map((tier) => {
+              const active = tier.id === selectedFundingTierId;
+              return (
+                <TouchableOpacity
+                  key={tier.id}
+                  style={[styles.tierPill, active && styles.tierPillActive]}
+                  onPress={() => selectFundingTier(tier)}
+                >
+                  <View>
+                    <Text style={[styles.tierLabel, active && styles.tierLabelActive]}>{tier.label}</Text>
+                    <Text style={styles.tierTitle}>{tier.title}</Text>
+                  </View>
+                  <Text style={styles.tierAmount}>{tier.amount.toLocaleString('fi-FI')} €</Text>
+                </TouchableOpacity>
+              );
+            })}
+            <View style={styles.goalTrack}>
+              <View style={[styles.goalFill, { width: `${campaignGoalProgress}%` }]} />
+            </View>
+          </View>
+
+          <View style={styles.editorCard}>
+            <View style={styles.editorToolbar}>
+              {editorTools.map((tool) => (
+                <TouchableOpacity key={tool.label} style={styles.editorTool}>
+                  <Ionicons name={tool.icon} size={17} color="#94a3b8" />
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TextInput
+              style={styles.editorInput}
+              placeholder="Kampanjan pitkä kuvausteksti: kerro visio, käyttö ja miksi backerit liittyvät mukaan."
+              placeholderTextColor="#64748b"
+              value={campaignDescription}
+              onChangeText={setCampaignDescription}
+              multiline
+              textAlignVertical="top"
+            />
+          </View>
+
           <TextInput
-            style={styles.input}
+            style={[styles.campaignInput, styles.targetingInput]}
             placeholder={t('adminTargetingPlaceholder')}
+            placeholderTextColor="#64748b"
             value={campaignTargeting}
             onChangeText={setCampaignTargeting}
             multiline
+            textAlignVertical="top"
           />
-          <TextInput style={styles.input} placeholder={t('adminBudgetPlaceholder')} keyboardType="numeric" value={campaignBudget} onChangeText={setCampaignBudget} />
-          <TextInput
-            style={styles.input}
-            placeholder={t('adminPlacementsPlaceholder')}
-            value={campaignPlacements}
-            onChangeText={setCampaignPlacements}
-          />
-          <TouchableOpacity style={[styles.primaryButton, isRTL && styles.rowReverse]} onPress={createCampaign}>
+
+          <View style={styles.previewCard}>
+            <Text style={styles.previewEyebrow}>Live preview</Text>
+            <View style={styles.previewMedia}>
+              {campaignPreviewAssetUrl && campaignAssetType === 'image' ? (
+                <Image source={{ uri: campaignPreviewAssetUrl }} style={styles.previewImage} />
+              ) : (
+                <View style={styles.previewPlaceholder}>
+                  <Ionicons name={campaignAssetType === 'video' || campaignVideoUrl.trim() ? 'videocam-outline' : 'image-outline'} size={38} color="#475569" />
+                </View>
+              )}
+            </View>
+            <Text style={styles.previewTier}>{selectedFundingTier.title}</Text>
+            <Text style={styles.previewTitle}>{campaignName || 'YOSLA SOME LIFE - kasvukampanja'}</Text>
+            <Text style={styles.previewCopy} numberOfLines={4}>
+              {campaignDescription || 'Tämä preview näyttää, miltä kampanja näyttää backereille mobiilissa.'}
+            </Text>
+          </View>
+
+          <TouchableOpacity style={styles.campaignCreateButton} onPress={createCampaign}>
             <Text style={styles.primaryButtonText}>{t('adminCreateCampaign')}</Text>
           </TouchableOpacity>
           {campaigns.map((campaign) => (
-              <View key={campaign.campaign_id} style={styles.queueItem}>
-                <Text style={[styles.queueTitle, isRTL && styles.textRight]}>{campaign.name}</Text>
-                <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminStatus')}: {campaign.status}</Text>
-                <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminBudgetPlaceholder')}: {campaign.budget}</Text>
-                <Text style={[styles.meta, isRTL && styles.textRight]}>{t('adminPlacementsPlaceholder')}: {(campaign.placements || []).join(', ')}</Text>
+              <View key={campaign.campaign_id} style={styles.darkQueueItem}>
+                <Text style={[styles.darkQueueTitle, isRTL && styles.textRight]}>{campaign.name}</Text>
+                <Text style={[styles.darkMeta, isRTL && styles.textRight]}>{t('adminStatus')}: {campaign.status}</Text>
+                <Text style={[styles.darkMeta, isRTL && styles.textRight]}>{t('adminBudgetPlaceholder')}: {campaign.budget}</Text>
+                <Text style={[styles.darkMeta, isRTL && styles.textRight]}>{t('adminPlacementsPlaceholder')}: {(campaign.placements || []).join(', ')}</Text>
               </View>
             ))}
         </View>
@@ -609,6 +840,176 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     backgroundColor: '#fff',
   },
+  campaignStudio: {
+    backgroundColor: '#050816',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    gap: 14,
+  },
+  campaignEyebrow: {
+    color: '#0F62FE',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
+  },
+  campaignTitle: { color: '#fff', fontSize: 23, fontWeight: '900' },
+  campaignIntro: { color: '#94a3b8', lineHeight: 20 },
+  mediaDropzone: {
+    minHeight: 190,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: '#475569',
+    borderRadius: 18,
+    backgroundColor: '#07111f',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+  },
+  mediaIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    backgroundColor: 'rgba(15, 98, 254, 0.16)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mediaTitle: { marginTop: 12, color: '#fff', fontWeight: '900', fontSize: 18 },
+  mediaCopy: { marginTop: 8, color: '#94a3b8', textAlign: 'center', lineHeight: 20 },
+  mediaActions: { marginTop: 14, flexDirection: 'row', gap: 10 },
+  mediaButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    backgroundColor: 'rgba(15, 98, 254, 0.16)',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+  },
+  mediaButtonText: { color: '#dbeafe', fontWeight: '900' },
+  formGroup: { gap: 7 },
+  formLabel: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  formRow: { flexDirection: 'row', gap: 10 },
+  formRowItem: { flex: 1, gap: 7 },
+  campaignInput: {
+    borderWidth: 1,
+    borderColor: '#334155',
+    borderRadius: 14,
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    backgroundColor: '#07111f',
+    color: '#f8fafc',
+  },
+  tiersPanel: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    backgroundColor: 'rgba(2, 6, 23, 0.72)',
+    padding: 14,
+    gap: 10,
+  },
+  tiersHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  tiersTitle: { color: '#cbd5e1', fontSize: 12, fontWeight: '900', letterSpacing: 1, textTransform: 'uppercase' },
+  tiersAmount: {
+    color: '#bfdbfe',
+    fontSize: 12,
+    fontWeight: '900',
+    backgroundColor: 'rgba(15, 98, 254, 0.16)',
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  tierPill: {
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    backgroundColor: '#07111f',
+    borderRadius: 16,
+    padding: 13,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  tierPillActive: {
+    borderColor: '#0F62FE',
+    backgroundColor: 'rgba(15, 98, 254, 0.16)',
+  },
+  tierLabel: { color: '#64748b', fontSize: 11, fontWeight: '900', textTransform: 'uppercase' },
+  tierLabelActive: { color: '#bfdbfe' },
+  tierTitle: { marginTop: 3, color: '#e2e8f0', fontWeight: '800' },
+  tierAmount: { color: '#fff', fontWeight: '900' },
+  goalTrack: { height: 8, borderRadius: 999, overflow: 'hidden', backgroundColor: '#1e293b' },
+  goalFill: { height: '100%', borderRadius: 999, backgroundColor: '#0F62FE' },
+  editorCard: {
+    overflow: 'hidden',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    backgroundColor: '#07111f',
+  },
+  editorToolbar: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#1e293b',
+    padding: 10,
+  },
+  editorTool: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f172a',
+  },
+  editorInput: {
+    minHeight: 150,
+    paddingHorizontal: 14,
+    paddingVertical: 14,
+    color: '#f8fafc',
+    lineHeight: 22,
+  },
+  targetingInput: { minHeight: 90 },
+  previewCard: {
+    overflow: 'hidden',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    backgroundColor: '#07111f',
+    paddingBottom: 16,
+  },
+  previewEyebrow: {
+    marginTop: 14,
+    marginHorizontal: 14,
+    color: '#64748b',
+    fontSize: 11,
+    fontWeight: '900',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  previewMedia: { marginTop: 12, aspectRatio: 16 / 9, backgroundColor: '#0f172a' },
+  previewImage: { width: '100%', height: '100%' },
+  previewPlaceholder: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  previewTier: { marginTop: 14, marginHorizontal: 14, color: '#60a5fa', fontSize: 12, fontWeight: '900', textTransform: 'uppercase' },
+  previewTitle: { marginTop: 6, marginHorizontal: 14, color: '#fff', fontSize: 20, fontWeight: '900' },
+  previewCopy: { marginTop: 8, marginHorizontal: 14, color: '#cbd5e1', lineHeight: 21 },
+  campaignCreateButton: {
+    backgroundColor: '#0F62FE',
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+  },
   roleRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
   rowReverseWrap: { flexDirection: 'row-reverse' },
   roleButton: {
@@ -644,7 +1045,10 @@ const styles = StyleSheet.create({
   primaryButtonText: { color: '#fff', fontWeight: '800' },
   secondaryButtonText: { color: '#111827', fontWeight: '800' },
   queueItem: { borderTopWidth: 1, borderTopColor: '#eef2f7', paddingTop: 10, gap: 4 },
+  darkQueueItem: { borderTopWidth: 1, borderTopColor: '#1e293b', paddingTop: 10, gap: 4 },
   queueTitle: { fontWeight: '800', color: '#111827' },
+  darkQueueTitle: { fontWeight: '900', color: '#f8fafc' },
+  darkMeta: { color: '#94a3b8' },
   toggle: {
     alignSelf: 'flex-start',
     paddingHorizontal: 12,

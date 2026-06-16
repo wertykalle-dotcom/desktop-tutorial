@@ -15,7 +15,11 @@ const DECISION_REASONS = [
   'off_topic',
   'unsafe_content',
   'duplicate',
+  'copyright',
+  'music_copyright',
 ] as const;
+
+type ModerationAction = 'approve' | 'limit' | 'warn' | 'remove';
 
 type QueueItem = {
   moderation_id: string;
@@ -30,8 +34,14 @@ type QueueItem = {
   created_at: string;
   post_summary?: {
     post_id?: string;
+    user_id?: string;
     username?: string;
     text?: string;
+    title?: string | null;
+    copyright_status?: string;
+    music_risk?: string;
+    distribution_limited?: boolean;
+    trust_score?: number;
   } | null;
   author_presence?: {
     is_online?: boolean;
@@ -49,11 +59,6 @@ type HistoryItem = QueueItem & {
   reviewed_reason?: string | null;
   reviewed_reason_tags?: string[] | string | null;
   reviewed_reason_custom?: string | null;
-  post_summary?: {
-    post_id?: string;
-    username?: string;
-    text?: string;
-  } | null;
   author_presence?: {
     is_online?: boolean;
     last_active_at?: string | null;
@@ -71,7 +76,7 @@ export default function ModerationScreen() {
   const [moderationSettings, setModerationSettings] = useState<ModerationSettings>({ sensitivity: 50 });
   const [decisionModalOpen, setDecisionModalOpen] = useState(false);
   const [decisionReason, setDecisionReason] = useState('');
-  const [decisionAction, setDecisionAction] = useState<'approve' | 'reject' | null>(null);
+  const [decisionAction, setDecisionAction] = useState<ModerationAction | null>(null);
   const [decisionTarget, setDecisionTarget] = useState<QueueItem | null>(null);
   const [decisionReasonTags, setDecisionReasonTags] = useState<string[]>([]);
   const [queueFilter, setQueueFilter] = useState('');
@@ -96,7 +101,7 @@ export default function ModerationScreen() {
     }
   }, [apiFetch, canAccess, token]);
 
-  const resolveItem = async (item: QueueItem, action: 'approve' | 'reject', reason: string) => {
+  const resolveItem = async (item: QueueItem, action: ModerationAction, reason: string) => {
     try {
       const response = await apiFetch(`/admin/moderation-queue/${item.moderation_id}/action`, {
         method: 'POST',
@@ -118,12 +123,31 @@ export default function ModerationScreen() {
     }
   };
 
-  const openDecisionModal = (item: QueueItem, action: 'approve' | 'reject') => {
+  const openDecisionModal = (item: QueueItem, action: ModerationAction) => {
     setDecisionTarget(item);
     setDecisionAction(action);
     setDecisionReason(item.reason || '');
     setDecisionReasonTags([]);
     setDecisionModalOpen(true);
+  };
+
+  const adjustTrustScore = async (item: QueueItem, delta: number) => {
+    const targetUserId = item.post_summary?.user_id || item.user_id;
+    if (!targetUserId) return;
+    try {
+      const response = await apiFetch(`/admin/users/${targetUserId}/trust-score`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          delta,
+          reason: delta > 0 ? 'moderation_manual_restore' : 'moderation_manual_penalty',
+        }),
+      });
+      if (!response || !response.ok) throw new Error('Trust Score update failed');
+      await loadData();
+    } catch (error) {
+      console.error('Trust Score update failed:', error);
+    }
   };
 
   const submitDecision = async () => {
@@ -177,6 +201,38 @@ export default function ModerationScreen() {
       }
     }
     return [];
+  };
+
+  const actionLabel = (action: ModerationAction | null) => {
+    switch (action) {
+      case 'approve':
+        return 'Hyväksy sisältö';
+      case 'limit':
+        return 'Rajoita / mykistä';
+      case 'warn':
+        return 'Varoita käyttäjää';
+      case 'remove':
+        return 'Poista julkaisu';
+      default:
+        return 'Päätös';
+    }
+  };
+
+  const renderRiskPanel = (item: QueueItem | HistoryItem) => {
+    const summary = item.post_summary;
+    if (!summary) return null;
+    return (
+      <View style={styles.riskPanel}>
+        <View style={styles.riskRow}>
+          <Badge tone="muted" label={`Trust ${summary.trust_score ?? 100}`} compact />
+          <Badge tone={summary.distribution_limited ? 'warning' : 'success'} label={summary.distribution_limited ? 'Jakelu rajoitettu' : 'Jakelu ok'} compact />
+          <Badge tone={summary.music_risk && summary.music_risk !== 'none' ? 'warning' : 'muted'} label={`Music: ${summary.music_risk || 'none'}`} compact />
+        </View>
+        <Text style={[styles.meta, isRTL && styles.textRight]}>
+          Copyright: {summary.copyright_status || 'clear'}
+        </Text>
+      </View>
+    );
   };
 
   const openOriginal = (item: QueueItem) => {
@@ -255,12 +311,29 @@ export default function ModerationScreen() {
                 {t('moderationPostPreview')}: @{item.post_summary.username || t('adminNoData')} · {item.post_summary.text || t('adminNoData')}
               </Text>
             ) : null}
+            {renderRiskPanel(item)}
             <View style={styles.actionRow}>
               <TouchableOpacity style={[styles.actionButton, styles.approveButton]} onPress={() => openDecisionModal(item, 'approve')}>
-                <Text style={styles.actionButtonText}>{t('adminApprove')}</Text>
+                <Text style={styles.actionButtonText}>Hyväksy</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.actionButton, styles.rejectButton]} onPress={() => openDecisionModal(item, 'reject')}>
-                <Text style={styles.actionButtonText}>{t('adminReject')}</Text>
+              <TouchableOpacity style={[styles.actionButton, styles.limitButton]} onPress={() => openDecisionModal(item, 'limit')}>
+                <Text style={styles.actionButtonText}>Rajoita</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.actionRow}>
+              <TouchableOpacity style={[styles.actionButton, styles.warnButton]} onPress={() => openDecisionModal(item, 'warn')}>
+                <Text style={styles.actionButtonText}>Varoita</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.actionButton, styles.rejectButton]} onPress={() => openDecisionModal(item, 'remove')}>
+                <Text style={styles.actionButtonText}>Poista</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={styles.trustActionRow}>
+              <TouchableOpacity style={styles.trustButton} onPress={() => void adjustTrustScore(item, 5)}>
+                <Text style={styles.trustButtonText}>Trust +5</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.trustButton} onPress={() => void adjustTrustScore(item, -5)}>
+                <Text style={styles.trustButtonText}>Trust -5</Text>
               </TouchableOpacity>
             </View>
             <TouchableOpacity
@@ -302,6 +375,7 @@ export default function ModerationScreen() {
                 {t('moderationPostPreview')}: @{item.post_summary.username || t('adminNoData')} · {item.post_summary.text || t('adminNoData')}
               </Text>
             ) : null}
+            {renderRiskPanel(item)}
             <Text style={[styles.meta, isRTL && styles.textRight]}>
               {t('profileLastActive')}: {item.author_presence?.last_active_at ? formatRelativeTime(item.author_presence.last_active_at) : t('messagesNever')}
             </Text>
@@ -333,10 +407,10 @@ export default function ModerationScreen() {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>
-              {decisionAction === 'approve' ? t('moderationApproveDialogTitle') : t('moderationRejectDialogTitle')}
+              {actionLabel(decisionAction)}
             </Text>
             <Text style={styles.modalBody}>
-              {decisionAction === 'approve' ? t('moderationApproveDialogBody') : t('moderationRejectDialogBody')}
+              Tämä päätös päivittää julkaisun copyright/music-tilan, lähettää käyttäjälle ilmoituksen ja säätää Trust Scorea päätöksen mukaan.
             </Text>
             <View style={styles.reasonTagRow}>
               {DECISION_REASONS.map((tag) => (
@@ -364,7 +438,7 @@ export default function ModerationScreen() {
                 <Text style={styles.modalCancelText}>{t('cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={[styles.modalButton, decisionAction === 'approve' ? styles.modalApproveButton : styles.modalRejectButton]} onPress={() => void submitDecision()}>
-                <Text style={styles.modalConfirmText}>{decisionAction === 'approve' ? t('adminApprove') : t('adminReject')}</Text>
+                <Text style={styles.modalConfirmText}>{actionLabel(decisionAction)}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -391,8 +465,15 @@ const styles = StyleSheet.create({
   actionRow: { flexDirection: 'row', gap: 8, marginTop: 10 },
   actionButton: { flex: 1, borderRadius: 12, paddingVertical: 10, alignItems: 'center' },
   approveButton: { backgroundColor: '#0f766e' },
+  limitButton: { backgroundColor: '#92400e' },
+  warnButton: { backgroundColor: '#7c3aed' },
   rejectButton: { backgroundColor: '#b91c1c' },
   actionButtonText: { color: '#fff', fontWeight: '800' },
+  trustActionRow: { flexDirection: 'row', gap: 8, marginTop: 8 },
+  trustButton: { flex: 1, borderRadius: 999, borderWidth: 1, borderColor: '#cbd5e1', paddingVertical: 8, alignItems: 'center', backgroundColor: '#f8fafc' },
+  trustButtonText: { color: '#334155', fontWeight: '900', fontSize: 12 },
+  riskPanel: { marginTop: 10, borderWidth: 1, borderColor: '#fde68a', borderRadius: 12, backgroundColor: '#fffbeb', padding: 10 },
+  riskRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' },
   secondaryButton: { marginTop: 10, borderRadius: 12, paddingVertical: 10, alignItems: 'center', backgroundColor: '#e5e7eb' },
   secondaryButtonDisabled: { opacity: 0.45 },
   secondaryButtonText: { color: '#111827', fontWeight: '800' },
