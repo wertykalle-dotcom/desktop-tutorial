@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect, useContext, ReactNode } from 'react';
+import React, { createContext, useCallback, useState, useEffect, useContext, ReactNode } from 'react';
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 import { apiUrl, buildApiHeaders } from '../utils/api/http';
@@ -230,7 +230,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     }
   };
 
-  const logout = async () => {
+  const logout = useCallback(async () => {
     const previousToken = token;
     try {
       if (previousToken) {
@@ -251,11 +251,19 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       setUser(null);
       setLoading(false);
     }
-  };
+  }, [token]);
 
-  const updateUser = (userData: Partial<User>) => {
-    setUser((prevUser) => (prevUser ? { ...prevUser, ...userData, role: normalizeRole(userData.role ?? prevUser.role) } : prevUser));
-  };
+  const updateUser = useCallback((userData: Partial<User>) => {
+    setUser((prevUser) => {
+      if (!prevUser) return prevUser;
+      const nextUser = { ...prevUser, ...userData, role: normalizeRole(userData.role ?? prevUser.role) };
+      const changed = Object.keys(nextUser).some((key) => {
+        const typedKey = key as keyof User;
+        return nextUser[typedKey] !== prevUser[typedKey];
+      });
+      return changed ? nextUser : prevUser;
+    });
+  }, []);
 
   return (
     <AuthContext.Provider
