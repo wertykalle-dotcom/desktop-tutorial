@@ -449,6 +449,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
     if (recordingSortMode === 'popular') return ((b.views || 0) + (b.likes_count || 0) * 2 + (b.comments_count || 0) * 3) - ((a.views || 0) + (a.likes_count || 0) * 2 + (a.comments_count || 0) * 3);
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
+  const pinnedProfileRecordings = sortedRecordings.filter(isRecordingPinned).slice(0, 2);
   const recordingAnalytics = recordings.reduce(
     (summary, recording) => ({
       views: summary.views + Number(recording.views || 0),
@@ -978,6 +979,75 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                   </TouchableOpacity>
                 );
               })}
+            </View>
+          ) : null}
+
+          {isProfileView && profileContentTab === 'posts' && pinnedProfileRecordings.length ? (
+            <View style={styles.pinnedRecordingsPanel}>
+              <View style={[styles.pinnedRecordingsHeader, rtlRowStyle]}>
+                <View style={styles.pinnedRecordingsHeaderText}>
+                  <Text style={[styles.pinnedRecordingsEyebrow, isRTL && styles.textRight]}>Kiinnitetyt replayt</Text>
+                  <Text style={[styles.pinnedRecordingsTitle, isRTL && styles.textRight]}>Profiilin live-tallenteet</Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.pinnedRecordingsViewAll}
+                  onPress={() => setProfileContentTab('recordings')}
+                  accessibilityRole="button"
+                  accessibilityLabel="Avaa kaikki live-tallenteet"
+                >
+                  <Ionicons name="albums-outline" size={15} color="#e0f2fe" />
+                  <Text style={styles.pinnedRecordingsViewAllText}>Kaikki</Text>
+                </TouchableOpacity>
+              </View>
+              <View style={[styles.pinnedRecordingsGrid, isRTL && styles.rowReverseWrap]}>
+                {pinnedProfileRecordings.map((recording) => {
+                  const thumbnail = recording.image || recording.thumbnailUrl || recording.thumbnail_url || '';
+                  return (
+                    <TouchableOpacity
+                      key={recording.post_id}
+                      style={styles.pinnedRecordingCard}
+                      onPress={() => router.push(`/posts/${recording.post_id}`)}
+                      activeOpacity={0.86}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Avaa kiinnitetty tallenne ${recording.title || recording.text || 'Live-tallenne'}`}
+                    >
+                      <View style={styles.pinnedRecordingThumb}>
+                        {thumbnail ? (
+                          <Image source={{ uri: thumbnail }} style={styles.pinnedRecordingImage} />
+                        ) : (
+                          <View style={styles.pinnedRecordingFallback}>
+                            <Ionicons name="videocam-outline" size={26} color="#60a5fa" />
+                          </View>
+                        )}
+                        <View style={styles.pinnedRecordingReplayBadge}>
+                          <View style={styles.recordingReplayDot} />
+                          <Text style={styles.pinnedRecordingReplayText}>LIVE REPLAY</Text>
+                        </View>
+                        <Text style={styles.pinnedRecordingDuration}>{formatReplayDuration(recording.duration || 0)}</Text>
+                      </View>
+                      <View style={styles.pinnedRecordingBody}>
+                        <Text style={[styles.pinnedRecordingTitle, isRTL && styles.textRight]} numberOfLines={2}>
+                          {recording.title || recording.text || 'YOSLA Live -tallenne'}
+                        </Text>
+                        <View style={[styles.pinnedRecordingStats, isRTL && styles.rowReverseWrap]}>
+                          <View style={styles.pinnedRecordingStat}>
+                            <Ionicons name="eye-outline" size={12} color="#bfdbfe" />
+                            <Text style={styles.pinnedRecordingStatText}>{formatCompactCount(recording.views || 0)}</Text>
+                          </View>
+                          <View style={styles.pinnedRecordingStat}>
+                            <Ionicons name="heart-outline" size={12} color="#fecaca" />
+                            <Text style={styles.pinnedRecordingStatText}>{formatCompactCount(recording.likes_count || 0)}</Text>
+                          </View>
+                          <View style={styles.pinnedRecordingStat}>
+                            <Ionicons name="chatbubble-outline" size={12} color="#bae6fd" />
+                            <Text style={styles.pinnedRecordingStatText}>{formatCompactCount(recording.comments_count || 0)}</Text>
+                          </View>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
             </View>
           ) : null}
 
@@ -2111,6 +2181,150 @@ const styles = StyleSheet.create({
   },
   profileTabTextActive: {
     color: '#f8fafc',
+  },
+  pinnedRecordingsPanel: {
+    width: '100%',
+    marginTop: 16,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    backgroundColor: '#07111f',
+    padding: 14,
+  },
+  pinnedRecordingsHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 12,
+  },
+  pinnedRecordingsHeaderText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  pinnedRecordingsEyebrow: {
+    color: '#fbbf24',
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
+  pinnedRecordingsTitle: {
+    color: '#f8fafc',
+    fontSize: 17,
+    fontWeight: '900',
+    marginTop: 3,
+  },
+  pinnedRecordingsViewAll: {
+    minHeight: 38,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.38)',
+    backgroundColor: 'rgba(37,99,235,0.18)',
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  pinnedRecordingsViewAllText: {
+    color: '#e0f2fe',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  pinnedRecordingsGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  pinnedRecordingCard: {
+    flexGrow: 1,
+    flexBasis: '48%',
+    minWidth: 220,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.22)',
+    backgroundColor: '#020617',
+    overflow: 'hidden',
+  },
+  pinnedRecordingThumb: {
+    width: '100%',
+    aspectRatio: 16 / 9,
+    backgroundColor: '#0f172a',
+  },
+  pinnedRecordingImage: {
+    width: '100%',
+    height: '100%',
+  },
+  pinnedRecordingFallback: {
+    width: '100%',
+    height: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f172a',
+  },
+  pinnedRecordingReplayBadge: {
+    position: 'absolute',
+    top: 9,
+    left: 9,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(127,29,29,0.88)',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.42)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  pinnedRecordingReplayText: {
+    color: '#fee2e2',
+    fontSize: 9,
+    fontWeight: '900',
+  },
+  pinnedRecordingDuration: {
+    position: 'absolute',
+    right: 9,
+    bottom: 9,
+    overflow: 'hidden',
+    borderRadius: 999,
+    backgroundColor: 'rgba(2,6,23,0.86)',
+    color: '#f8fafc',
+    fontSize: 10,
+    fontWeight: '900',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  pinnedRecordingBody: {
+    padding: 11,
+  },
+  pinnedRecordingTitle: {
+    color: '#f8fafc',
+    fontSize: 13,
+    fontWeight: '900',
+    lineHeight: 17,
+    minHeight: 34,
+  },
+  pinnedRecordingStats: {
+    marginTop: 9,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  pinnedRecordingStat: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    paddingHorizontal: 7,
+    paddingVertical: 5,
+  },
+  pinnedRecordingStatText: {
+    color: '#e2e8f0',
+    fontSize: 10,
+    fontWeight: '900',
   },
   recordingsSection: {
     width: '100%',
