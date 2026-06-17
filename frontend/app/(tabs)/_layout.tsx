@@ -272,7 +272,6 @@ export default function TabsLayout() {
         tabBarPosition: isMobile ? 'bottom' : 'left',
         tabBarActiveTintColor: isMobile ? '#fff' : '#ef4444',
         tabBarInactiveTintColor: isMobile ? '#B8C0D8' : '#64748B',
-        tabBarScrollEnabled: !isMobile,
         tabBarItemStyle: {
           width: isMobile ? undefined : 112,
         },

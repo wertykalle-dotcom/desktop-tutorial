@@ -119,6 +119,22 @@ const matrixTrendingCards = [
   },
 ] as const;
 
+type MatrixTone = typeof matrixTrendingCards[number]['tone'];
+
+const getMatrixToneStyle = (tone: MatrixTone) => {
+  switch (tone) {
+    case 'crimson':
+      return styles.matrix_crimson;
+    case 'indigo':
+      return styles.matrix_indigo;
+    case 'blue':
+      return styles.matrix_blue;
+    case 'green':
+    default:
+      return styles.matrix_green;
+  }
+};
+
 const upcomingBroadcasts = [
   { time: '14:00-16:00', title: 'Kehittäjiltä', host: 'Studio FI' },
   { time: '19:00-20:00', title: 'Musiikkistudio', host: 'Live' },
@@ -1056,7 +1072,6 @@ function FeedScreen() {
   };
 
   const openLiveHost = (host: typeof liveHosts[number]) => {
-    setActiveLiveHost(host);
     router.push({
       pathname: '/live',
       params: { roomId: host.id, topic: host.topic },
@@ -1302,7 +1317,7 @@ function FeedScreen() {
         })) : matrixTrendingCards).map((card) => (
           <TouchableOpacity
             key={card.rank}
-            style={[styles.trendingCard, !isDesktop && styles.mobileTrendingCard, styles[`matrix_${card.tone}`]]}
+            style={[styles.trendingCard, !isDesktop && styles.mobileTrendingCard, getMatrixToneStyle(card.tone as MatrixTone)]}
             onPress={() => 'postId' in card ? router.push(`/posts/${card.postId}`) : openTrendingTopic(card.title)}
           >
             <View style={styles.trendingCardTop}>
@@ -1636,7 +1651,7 @@ function FeedScreen() {
             ]}
             onLoad={(event) => {
               const sourceSize = event.nativeEvent?.source;
-              const target = event.nativeEvent?.target as unknown as { naturalWidth?: number; naturalHeight?: number } | undefined;
+              const target = (event.nativeEvent as unknown as { target?: { naturalWidth?: number; naturalHeight?: number } })?.target;
               const width = sourceSize?.width || target?.naturalWidth;
               const height = sourceSize?.height || target?.naturalHeight;
               if (!width || !height) return;

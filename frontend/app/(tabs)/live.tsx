@@ -260,10 +260,6 @@ export default function LiveScreen() {
   const activeRoomId = activeHost?.id || '';
 
   useEffect(() => {
-    console.log('LIVE RECORDING DEBUG BUILD V2');
-  }, []);
-
-  useEffect(() => {
     activeHostRef.current = activeHost;
   }, [activeHost]);
 
@@ -700,7 +696,14 @@ export default function LiveScreen() {
     try {
       const payload = await response.json();
       if (typeof payload?.detail === 'string') return `Upload failed: ${payload.detail}`;
-      if (Array.isArray(payload?.detail)) return `Upload failed: ${payload.detail.map((item) => item?.msg || JSON.stringify(item)).join(', ')}`;
+      if (Array.isArray(payload?.detail)) {
+        return `Upload failed: ${payload.detail.map((item: unknown) => {
+          if (item && typeof item === 'object' && 'msg' in item && typeof (item as { msg?: unknown }).msg === 'string') {
+            return (item as { msg: string }).msg;
+          }
+          return JSON.stringify(item);
+        }).join(', ')}`;
+      }
       if (typeof payload?.message === 'string') return `Upload failed: ${payload.message}`;
       if (typeof payload?.error === 'string') return `Upload failed: ${payload.error}`;
       return `${fallback} ${JSON.stringify(payload)}`;

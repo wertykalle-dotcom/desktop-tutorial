@@ -122,6 +122,7 @@ type Post = {
   thumbnailUrl?: string | null;
   thumbnail_url?: string | null;
   title?: string | null;
+  duration?: number | null;
   type?: string | null;
   status?: string | null;
   likes_count: number;

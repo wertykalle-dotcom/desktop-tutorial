@@ -879,7 +879,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                     style={[styles.profileTab, active && styles.profileTabActive]}
                     onPress={() => {
                       if (tab.key === 'saved') {
-                        router.push('/(tabs)/saved');
+                        router.push('/(tabs)/saved' as never);
                         return;
                       }
                       setProfileContentTab(tab.key);
@@ -1126,7 +1126,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
 
           {isProfileView ? <TouchableOpacity
             style={[styles.messagesCard, rtlRowStyle]}
-            onPress={() => router.push('/(tabs)/settings')}
+            onPress={() => router.push('/(tabs)/settings' as never)}
             accessibilityRole="button"
             accessibilityLabel="Avaa asetukset"
             accessibilityHint="Siirtyy profiilin asetuksiin"
@@ -1144,7 +1144,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
 
           {isProfileView ? <TouchableOpacity
             style={[styles.messagesCard, rtlRowStyle]}
-            onPress={() => router.push('/(tabs)/saved')}
+            onPress={() => router.push('/(tabs)/saved' as never)}
             accessibilityRole="button"
             accessibilityLabel="Avaa tallennetut julkaisut"
             accessibilityHint="Siirtyy omiin kirjanmerkkeihin"
@@ -1281,7 +1281,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
 
               <TouchableOpacity
                 style={[styles.button, styles.editButton, isBusy && styles.buttonDisabled]}
-                onPress={() => router.push('/(tabs)/notifications')}
+                onPress={() => router.push('/(tabs)/notifications' as never)}
                 disabled={isBusy}
                 accessibilityRole="button"
                 accessibilityLabel="Avaa ilmoitukset"

@@ -14,6 +14,7 @@ interface User {
   followers_count: number;
   following_count: number;
   posts_count: number;
+  trust_score?: number;
   role?: RoleKey;
   banned_until?: string | null;
 }
