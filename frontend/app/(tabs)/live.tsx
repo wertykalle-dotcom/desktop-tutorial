@@ -1515,12 +1515,35 @@ export default function LiveScreen() {
   const liveDashboard = activeHost ? (
     <View style={[styles.liveDashboard, isMobileLive && styles.liveDashboardMobile]}>
       <View style={styles.liveTopBar}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.liveModalBadgeInline}>LIVE</Text>
+        <View style={styles.liveTopBrandMark}>
+          <Ionicons name="radio" size={22} color="#fff" />
+        </View>
+        <View style={styles.liveTopContent}>
+          <View style={styles.liveTopBadgeRow}>
+            <View style={styles.liveModalBadgeInline}>
+              <View style={styles.liveTopLiveDot} />
+              <Text style={styles.liveModalBadgeInlineText}>LIVE</Text>
+            </View>
+            <Text style={styles.liveStudioLabel}>YOSLA Studio</Text>
+          </View>
           <Text style={styles.liveModalTitle}>{activeHost.name}</Text>
-          <Text style={styles.liveModalTopic}>{activeHost.topic} · {activeHost.viewers} katsojaa · {formatLiveDuration(elapsedSeconds)}</Text>
+          <View style={styles.liveTopMetaRow}>
+            <View style={styles.liveTopMetaPill}>
+              <Ionicons name="pricetag-outline" size={12} color="#bfdbfe" />
+              <Text style={styles.liveTopMetaText}>{activeHost.topic}</Text>
+            </View>
+            <View style={styles.liveTopMetaPill}>
+              <Ionicons name="eye-outline" size={12} color="#fecaca" />
+              <Text style={styles.liveTopMetaText}>{activeHost.viewers} katsojaa</Text>
+            </View>
+            <View style={styles.liveTopMetaPill}>
+              <Ionicons name="time-outline" size={12} color="#bbf7d0" />
+              <Text style={styles.liveTopMetaText}>{formatLiveDuration(elapsedSeconds)}</Text>
+            </View>
+          </View>
         </View>
         <TouchableOpacity style={styles.liveExitButton} onPress={closeLiveModal}>
+          <Ionicons name="exit-outline" size={16} color="#fecaca" />
           <Text style={styles.liveExitText}>Poistu</Text>
         </TouchableOpacity>
       </View>
@@ -2058,7 +2081,59 @@ const styles = StyleSheet.create({
   liveModal: { flex: 1, backgroundColor: '#050816', padding: 16 },
   liveDashboard: { width: '100%', gap: 20 },
   liveDashboardMobile: { flex: 1 },
-  liveTopBar: { flexDirection: 'row', alignItems: 'center', gap: 16, borderRadius: 18, borderWidth: 1, borderColor: '#1f2937', backgroundColor: '#0f172a', padding: 16 },
+  liveTopBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.28)',
+    backgroundColor: '#07111f',
+    padding: 16,
+    shadowColor: '#0f62fe',
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
+  },
+  liveTopBrandMark: {
+    width: 48,
+    height: 48,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0f62fe',
+    borderWidth: 1,
+    borderColor: 'rgba(147,197,253,0.42)',
+    shadowColor: '#38bdf8',
+    shadowOpacity: 0.28,
+    shadowRadius: 14,
+  },
+  liveTopContent: { flex: 1, minWidth: 0 },
+  liveTopBadgeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginBottom: 7 },
+  liveStudioLabel: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.28)',
+    backgroundColor: 'rgba(37,99,235,0.16)',
+    color: '#bfdbfe',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  liveTopMetaRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 7, marginTop: 9 },
+  liveTopMetaPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    backgroundColor: 'rgba(15,23,42,0.86)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  liveTopMetaText: { color: '#e2e8f0', fontSize: 11, fontWeight: '900' },
   liveMainContent: { display: 'flex', flexDirection: 'row', gap: 24, width: '100%', alignItems: 'stretch' },
   liveMainContentMobile: { flexDirection: 'column', gap: 14 },
   liveMediaColumn: { flexGrow: 0, flexShrink: 1, flexBasis: '62%', gap: 14, minWidth: 0 },
@@ -2067,7 +2142,9 @@ const styles = StyleSheet.create({
   liveSocialColumnMobile: { flexBasis: 'auto', width: '100%', minWidth: 0 },
   liveVideoShell: { width: '100%', aspectRatio: 16 / 9, borderRadius: 22, backgroundColor: '#111827', borderWidth: 1, borderColor: '#334155', alignItems: 'center', justifyContent: 'center', overflow: 'hidden', shadowColor: '#000', shadowOpacity: 0.24, shadowRadius: 24, shadowOffset: { width: 0, height: 16 } },
   liveModalBadge: { position: 'absolute', top: 16, left: 16, color: '#fff', backgroundColor: '#ef4444', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, fontSize: 12, fontWeight: '900' },
-  liveModalBadgeInline: { alignSelf: 'flex-start', overflow: 'hidden', color: '#fff', backgroundColor: '#ef4444', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, fontSize: 12, fontWeight: '900', marginBottom: 8 },
+  liveModalBadgeInline: { alignSelf: 'flex-start', flexDirection: 'row', alignItems: 'center', gap: 6, overflow: 'hidden', backgroundColor: 'rgba(220,38,38,0.2)', borderWidth: 1, borderColor: 'rgba(248,113,113,0.42)', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5 },
+  liveTopLiveDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: '#ef4444' },
+  liveModalBadgeInlineText: { color: '#fecaca', fontSize: 11, fontWeight: '900' },
   liveModalTitle: { color: '#fff', fontSize: 28, fontWeight: '900' },
   liveModalTopic: { color: '#cbd5e1', fontSize: 14, marginTop: 4 },
   videoPlaceholderTitle: { color: '#fff', fontSize: 28, fontWeight: '900', marginTop: 12 },
@@ -2248,6 +2325,17 @@ const styles = StyleSheet.create({
   guestModeText: { color: '#fff', fontWeight: '900' },
   copyInviteButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 7, borderRadius: 12, borderWidth: 1, borderColor: '#60a5fa', backgroundColor: 'rgba(37, 99, 235, 0.28)', padding: 10 },
   copyInviteText: { color: '#fff', fontSize: 12, fontWeight: '900' },
-  liveExitButton: { alignSelf: 'center', backgroundColor: '#fff', borderRadius: 999, paddingHorizontal: 24, paddingVertical: 12 },
-  liveExitText: { color: '#111827', fontWeight: '900', fontSize: 15 },
+  liveExitButton: {
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: 'rgba(127,29,29,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.38)',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 11,
+  },
+  liveExitText: { color: '#fecaca', fontWeight: '900', fontSize: 14 },
 });
