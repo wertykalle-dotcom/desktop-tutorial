@@ -11,6 +11,9 @@ export type Post = {
   thumbnail_url?: string;
   title?: string | null;
   duration?: number | null;
+  visibility?: 'public' | 'private' | 'hidden' | string | null;
+  pinned_to_profile?: boolean | number | null;
+  is_pinned?: boolean | number | null;
   type?: string;
   source?: string;
   status?: 'processing' | 'ready' | 'failed' | string;

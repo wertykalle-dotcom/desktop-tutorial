@@ -10,7 +10,7 @@ import logging
 import time
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr, ConfigDict
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import uuid
 import random
 import mimetypes
@@ -931,6 +931,7 @@ class Post(BaseModel):
     authorId: Optional[str] = None
     duration: Optional[int] = None
     visibility: str = "public"
+    pinned_to_profile: bool = False
     type: Optional[str] = None
     is_clip: bool = False
     source: Optional[str] = None
@@ -979,6 +980,9 @@ class PostUpdate(BaseModel):
     text: Optional[str] = None
     image: Optional[str] = None
     thumbnailUrl: Optional[str] = None
+    visibility: Optional[str] = None
+    pinned_to_profile: Optional[bool] = None
+    is_pinned: Optional[bool] = None
 
 class BookmarkToggleCreate(BaseModel):
     post_id: str
@@ -4500,6 +4504,7 @@ def normalize_post_payload(post: Dict[str, Any]) -> Dict[str, Any]:
         except Exception:
             normalized[float_metric] = 0
     normalized["visibility"] = normalized.get("visibility") or "public"
+    normalized["pinned_to_profile"] = bool(normalized.get("pinned_to_profile") or normalized.get("is_pinned") or False)
     if normalized.get("video") is None:
         normalized["video"] = None
     return normalized
@@ -5102,8 +5107,8 @@ def create_sqlite_post(post: Dict[str, Any]) -> None:
         cursor.execute(
             """
             INSERT INTO posts (
-                post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, status, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, created_at, keywords, hashtags, mentions, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, pinned_to_profile, type, is_clip, source, status, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, created_at, keywords, hashtags, mentions, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 post["post_id"],
@@ -5116,6 +5121,7 @@ def create_sqlite_post(post: Dict[str, Any]) -> None:
                 post.get("title"),
                 post.get("duration"),
                 post.get("visibility") or "public",
+                int(bool(post.get("pinned_to_profile") or post.get("is_pinned") or False)),
                 post.get("type"),
                 int(bool(post.get("is_clip", False))),
                 post.get("source"),
@@ -5155,47 +5161,67 @@ def update_sqlite_post_processing_result(post_id: str, video_url: Optional[str],
     return get_sqlite_post(post_id)
 
 
-def get_sqlite_feed(skip: int = 0, limit: int = 20, user_ids: Optional[List[str]] = None, hide_nsfw: bool = False) -> List[Dict[str, Any]]:
+def get_sqlite_feed(
+    skip: int = 0,
+    limit: int = 20,
+    user_ids: Optional[List[str]] = None,
+    hide_nsfw: bool = False,
+    current_user_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
     with get_sqlite_connection() as conn:
         cursor = conn.cursor()
+        visibility_clause = " AND (COALESCE(visibility, 'public') = 'public' OR user_id = ?)" if current_user_id else " AND COALESCE(visibility, 'public') = 'public'"
+        visibility_params: Tuple[Any, ...] = (current_user_id,) if current_user_id else tuple()
         if user_ids:
             placeholders = ",".join(["?"] * len(user_ids))
             nsfw_clause = " AND COALESCE(is_nsfw, 0) = 0" if hide_nsfw else ""
             cursor.execute(
                 f"""
-                SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
+                SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, pinned_to_profile, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
                 , keywords, hashtags, mentions
                 FROM posts
-                WHERE user_id IN ({placeholders}){nsfw_clause}
+                WHERE user_id IN ({placeholders}){visibility_clause}{nsfw_clause}
                 ORDER BY datetime(created_at) DESC
                 LIMIT ? OFFSET ?
                 """,
-                tuple(user_ids) + (limit, skip),
+                tuple(user_ids) + visibility_params + (limit, skip),
             )
         else:
-            nsfw_clause = "WHERE COALESCE(is_nsfw, 0) = 0" if hide_nsfw else ""
+            nsfw_clause = " AND COALESCE(is_nsfw, 0) = 0" if hide_nsfw else ""
             cursor.execute(
                 f"""
-                SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
+                SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, pinned_to_profile, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited
                 , keywords, hashtags, mentions
                 FROM posts
+                WHERE (COALESCE(visibility, 'public') = 'public' OR user_id = ?)
                 {nsfw_clause}
                 ORDER BY datetime(created_at) DESC
                 LIMIT ? OFFSET ?
                 """,
-                (limit, skip),
+                ((current_user_id or "") , limit, skip),
             )
         rows = cursor.fetchall()
         return [dict(row) for row in rows]
 
 
-def get_sqlite_media_posts(skip: int = 0, limit: int = 80, hide_nsfw: bool = False) -> List[Dict[str, Any]]:
+def get_sqlite_media_posts(
+    skip: int = 0,
+    limit: int = 80,
+    hide_nsfw: bool = False,
+    current_user_id: Optional[str] = None,
+    include_own_private: bool = False,
+) -> List[Dict[str, Any]]:
     with get_sqlite_connection() as conn:
         cursor = conn.cursor()
         nsfw_clause = "AND COALESCE(is_nsfw, 0) = 0" if hide_nsfw else ""
+        visibility_clause = "AND COALESCE(visibility, 'public') = 'public'"
+        visibility_params: List[Any] = []
+        if include_own_private and current_user_id:
+            visibility_clause = "AND (COALESCE(visibility, 'public') = 'public' OR user_id = ?)"
+            visibility_params.append(current_user_id)
         cursor.execute(
             f"""
-            SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, poll, reaction_counts,
+            SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, pinned_to_profile, type, is_clip, source, poll, reaction_counts,
                    repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited, keywords, hashtags, mentions
             FROM posts
             WHERE (
@@ -5209,11 +5235,12 @@ def get_sqlite_media_posts(skip: int = 0, limit: int = 80, hide_nsfw: bool = Fal
                 OR text LIKE '%Live Recording%'
                 OR text LIKE 'Tallenne:%'
             )
+            {visibility_clause}
             {nsfw_clause}
             ORDER BY datetime(created_at) DESC
             LIMIT ? OFFSET ?
             """,
-            (limit, skip),
+            tuple(visibility_params) + (limit, skip),
         )
         return [dict(row) for row in cursor.fetchall()]
 
@@ -5223,7 +5250,7 @@ def get_sqlite_post(post_id: str) -> Optional[Dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited, keywords
+            SELECT post_id, user_id, username, profile_picture, text, image, video, title, duration, visibility, pinned_to_profile, type, is_clip, source, poll, reaction_counts, repost_post_id, repost_count, likes_count, comments_count, views, watch_time, completion_rate, replay_count, created_at, is_nsfw, copyright_status, music_risk, music_warning_acknowledged, distribution_limited, keywords
             , hashtags, mentions
             FROM posts
             WHERE post_id = ?
@@ -5471,7 +5498,7 @@ def sqlite_get_bookmarked_posts(user_id: str, skip: int = 0, limit: int = 20, hi
         nsfw_clause = "AND COALESCE(p.is_nsfw, 0) = 0" if hide_nsfw else ""
         cursor.execute(
             f"""
-            SELECT p.post_id, p.user_id, p.username, p.profile_picture, p.text, p.image, p.video, p.title, p.duration, p.visibility, p.type, p.is_clip, p.source,
+            SELECT p.post_id, p.user_id, p.username, p.profile_picture, p.text, p.image, p.video, p.title, p.duration, p.visibility, p.pinned_to_profile, p.type, p.is_clip, p.source,
                    p.poll, p.reaction_counts,
                    p.repost_post_id, p.repost_count, p.likes_count, p.comments_count, p.created_at, p.is_nsfw,
                    p.keywords, p.hashtags, p.mentions
@@ -6827,6 +6854,14 @@ async def get_feed(
                 filter_query["user_id"]["$in"] = [uid for uid in existing["$in"] if uid not in excluded_user_ids]
             else:
                 filter_query["user_id"] = {"$nin": list(excluded_user_ids)}
+        visibility_filter: Dict[str, Any] = {
+            "$or": [
+                {"visibility": {"$exists": False}},
+                {"visibility": {"$in": [None, "", "public"]}},
+                {"user_id": current_user["user_id"]},
+            ]
+        }
+        filter_query = {"$and": [filter_query, visibility_filter]} if filter_query else visibility_filter
 
         # Get posts sorted by newest first
         posts_cursor = db.posts.find(
@@ -6938,7 +6973,13 @@ async def get_feed(
                 feed_user_ids = list(set(sqlite_following_ids(current_user["user_id"]) + [current_user["user_id"]]))
                 if excluded_user_ids:
                     feed_user_ids = [uid for uid in feed_user_ids if uid not in excluded_user_ids]
-            posts = get_sqlite_feed(skip=skip, limit=limit, user_ids=feed_user_ids, hide_nsfw=hide_nsfw)
+            posts = get_sqlite_feed(
+                skip=skip,
+                limit=limit,
+                user_ids=feed_user_ids,
+                hide_nsfw=hide_nsfw,
+                current_user_id=current_user["user_id"],
+            )
             if excluded_user_ids and not following_only:
                 posts = [p for p in posts if p["user_id"] not in excluded_user_ids]
         post_ids = [p["post_id"] for p in posts]
@@ -6989,6 +7030,7 @@ async def get_feed(
 async def get_media_posts(
     skip: int = 0,
     limit: int = 80,
+    includeOwnPrivate: bool = False,
     authorization: Optional[str] = Header(None)
 ):
     """Get media stream posts, including live replay clips and recording exports."""
@@ -7008,9 +7050,23 @@ async def get_media_posts(
                 {"text": {"$regex": r"(Live Replay|Tallenne:)", "$options": "i"}},
             ]
         }
-        filter_query: Dict[str, Any] = media_clause
+        public_visibility_clause: Dict[str, Any] = {
+            "$or": [
+                {"visibility": {"$exists": False}},
+                {"visibility": {"$in": [None, "", "public"]}},
+            ]
+        }
+        if includeOwnPrivate:
+            public_visibility_clause = {
+                "$or": [
+                    {"visibility": {"$exists": False}},
+                    {"visibility": {"$in": [None, "", "public"]}},
+                    {"user_id": current_user["user_id"]},
+                ]
+            }
+        filter_query: Dict[str, Any] = {"$and": [media_clause, public_visibility_clause]}
         if hide_nsfw:
-            filter_query = {"$and": [media_clause, {"is_nsfw": {"$ne": True}}]}
+            filter_query = {"$and": [media_clause, public_visibility_clause, {"is_nsfw": {"$ne": True}}]}
 
         posts = await db.posts.find(filter_query, {"_id": 0}).sort("created_at", -1).skip(skip).limit(safe_limit).to_list(length=safe_limit)
         post_ids = [p["post_id"] for p in posts]
@@ -7055,7 +7111,13 @@ async def get_media_posts(
                 poll["user_vote"] = user_poll_votes.get(post["post_id"]) or poll.get("user_vote")
         posts = await annotate_posts_with_moderation_status(posts)
     else:
-        posts = get_sqlite_media_posts(skip=skip, limit=safe_limit, hide_nsfw=hide_nsfw)
+        posts = get_sqlite_media_posts(
+            skip=skip,
+            limit=safe_limit,
+            hide_nsfw=hide_nsfw,
+            current_user_id=current_user["user_id"],
+            include_own_private=includeOwnPrivate,
+        )
         post_ids = [p["post_id"] for p in posts]
         comments_by_post = get_sqlite_comments_for_posts(post_ids)
         user_reactions = sqlite_get_user_reactions(post_ids, current_user["user_id"])
@@ -7107,6 +7169,8 @@ async def get_post(
         raise HTTPException(status_code=404, detail="Post not found")
 
     post = normalize_post_payload(post)
+    if post.get("visibility") not in {None, "", "public"} and post.get("user_id") != current_user["user_id"]:
+        raise HTTPException(status_code=404, detail="Post not found")
     if db is None:
         post["user_reaction"] = sqlite_get_user_reactions([post_id], current_user["user_id"]).get(post_id)
         post["is_bookmarked"] = post_id in sqlite_get_user_bookmarks([post_id], current_user["user_id"])
@@ -7221,6 +7285,14 @@ async def update_post(
     if payload.thumbnailUrl is not None:
         updates["thumbnailUrl"] = payload.thumbnailUrl.strip() or None
         updates["image"] = updates["thumbnailUrl"]
+    if payload.visibility is not None:
+        visibility = payload.visibility.strip().lower()
+        if visibility not in {"public", "private", "hidden"}:
+            raise HTTPException(status_code=400, detail="Invalid visibility")
+        updates["visibility"] = visibility
+    pinned_value = payload.pinned_to_profile if payload.pinned_to_profile is not None else payload.is_pinned
+    if pinned_value is not None:
+        updates["pinned_to_profile"] = bool(pinned_value)
     if not updates:
         raise HTTPException(status_code=400, detail="No post fields to update")
 
@@ -7256,6 +7328,8 @@ async def update_post(
             columns.append(f"{key} = ?")
             if key in {"hashtags", "mentions", "keywords"}:
                 values.append(json.dumps(value))
+            elif key == "pinned_to_profile":
+                values.append(int(bool(value)))
             else:
                 values.append(value)
         values.append(post_id)
@@ -10089,6 +10163,7 @@ async def create_indexes():
                         title TEXT,
                         duration INTEGER,
                         visibility TEXT DEFAULT 'public',
+                        pinned_to_profile INTEGER DEFAULT 0,
                         type TEXT,
                         is_clip INTEGER DEFAULT 0,
                         source TEXT,
@@ -10234,6 +10309,7 @@ async def create_indexes():
                         ("posts", "music_risk", "TEXT DEFAULT 'none'"),
                         ("posts", "music_warning_acknowledged", "INTEGER DEFAULT 0"),
                         ("posts", "distribution_limited", "INTEGER DEFAULT 0"),
+                        ("posts", "pinned_to_profile", "INTEGER DEFAULT 0"),
                     ):
                         try:
                             cur.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_name} {column_type}")
@@ -10483,6 +10559,10 @@ async def create_indexes():
                         pass
                     try:
                         cur.execute("ALTER TABLE posts ADD COLUMN visibility TEXT DEFAULT 'public'")
+                    except Exception:
+                        pass
+                    try:
+                        cur.execute("ALTER TABLE posts ADD COLUMN pinned_to_profile INTEGER DEFAULT 0")
                     except Exception:
                         pass
                     try:

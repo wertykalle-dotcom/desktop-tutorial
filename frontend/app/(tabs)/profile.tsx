@@ -24,6 +24,7 @@ import { useI18n } from '../../src/contexts/I18nContext';
 import { extractApiErrorMessage } from '../../src/utils/api/http';
 import { formatRelativeTime } from '../../src/utils/time';
 import { formatCompactCount, formatReplayDate, formatReplayDuration, isLiveReplayPost } from '../../src/features/video/liveReplay';
+import { copyPostLink } from '../../src/features/postActions/PostActionsButton';
 import type { AchievementsPayload, CreatorLevel } from '../../src/features/growth/growthTypes';
 import { localeLabels, SUPPORTED_LOCALES } from '../../src/i18n/locales';
 import {
@@ -59,9 +60,16 @@ const relationshipOptions: {
 const getRelationshipOption = (value?: string | null) =>
   relationshipOptions.find((option) => option.value === value) || relationshipOptions[3];
 
+const getRecordingVisibility = (recording?: Pick<Post, 'visibility'> | null): RecordingVisibility =>
+  recording?.visibility === 'private' ? 'private' : 'public';
+
+const isRecordingPinned = (recording?: Pick<Post, 'pinned_to_profile' | 'is_pinned'> | null) =>
+  Boolean(recording?.pinned_to_profile || recording?.is_pinned);
+
 type ProfileViewMode = 'profile' | 'saved' | 'settings';
 type ProfileContentTab = 'posts' | 'recordings' | 'saved' | 'likes';
 type RecordingSortMode = 'newest' | 'oldest' | 'longest' | 'popular';
+type RecordingVisibility = 'public' | 'private';
 type SavedCategoryKey = 'all' | 'posts' | 'discussions' | 'polls' | 'lives' | 'campaigns';
 
 type AccountHealthStatus = 'good' | 'watch' | 'restricted';
@@ -166,6 +174,8 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
   const [recordingTitleDraft, setRecordingTitleDraft] = useState('');
   const [recordingDescriptionDraft, setRecordingDescriptionDraft] = useState('');
   const [recordingThumbnailDraft, setRecordingThumbnailDraft] = useState('');
+  const [recordingVisibilityDraft, setRecordingVisibilityDraft] = useState<RecordingVisibility>('public');
+  const [recordingPinnedDraft, setRecordingPinnedDraft] = useState(false);
   const [achievementsPayload, setAchievementsPayload] = useState<AchievementsPayload | null>(null);
   const [creatorLevel, setCreatorLevel] = useState<CreatorLevel | null>(null);
   const [accountHealth, setAccountHealth] = useState<AccountHealth | null>(null);
@@ -230,7 +240,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
         setSavedPosts(Array.isArray(payload) ? payload : []);
       }
 
-      const mediaResp = await apiFetch('/media/posts?limit=200');
+      const mediaResp = await apiFetch('/media/posts?limit=200&includeOwnPrivate=true');
       if (mediaResp?.ok) {
         const payload = await mediaResp.json();
         const ownRecordings = Array.isArray(payload)
@@ -432,6 +442,8 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
   };
 
   const sortedRecordings = [...recordings].sort((a, b) => {
+    const pinnedDelta = Number(isRecordingPinned(b)) - Number(isRecordingPinned(a));
+    if (pinnedDelta !== 0) return pinnedDelta;
     if (recordingSortMode === 'oldest') return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
     if (recordingSortMode === 'longest') return (b.duration || 0) - (a.duration || 0);
     if (recordingSortMode === 'popular') return ((b.views || 0) + (b.likes_count || 0) * 2 + (b.comments_count || 0) * 3) - ((a.views || 0) + (a.likes_count || 0) * 2 + (a.comments_count || 0) * 3);
@@ -456,7 +468,61 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
     setRecordingTitleDraft(recording.title || '');
     setRecordingDescriptionDraft(recording.text || '');
     setRecordingThumbnailDraft(recording.image || recording.thumbnailUrl || recording.thumbnail_url || '');
+    setRecordingVisibilityDraft(getRecordingVisibility(recording));
+    setRecordingPinnedDraft(isRecordingPinned(recording));
     setRecordingEditorVisible(true);
+  };
+
+  const patchRecording = async (recording: Post, updates: Record<string, unknown>) => {
+    const response = await apiFetch(`/posts/${recording.post_id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates),
+    });
+    if (!response?.ok) {
+      const message = response ? await extractApiErrorMessage(response, 'Tallenteen päivitys epäonnistui.') : 'Tallenteen päivitys epäonnistui.';
+      throw new Error(message);
+    }
+    const updated = await response.json();
+    setRecordings((current) => current.map((item) => item.post_id === updated.post_id ? { ...item, ...updated } : item));
+    return updated as Post;
+  };
+
+  const copyRecordingLink = async (recording: Post) => {
+    try {
+      await copyPostLink(recording, setSaveSuccessMessage);
+    } catch (error) {
+      console.error('Recording link copy failed:', error);
+      setRefreshError(error instanceof Error ? error.message : 'Tallenteen linkin kopiointi epäonnistui.');
+    }
+  };
+
+  const toggleRecordingPinned = async (recording: Post) => {
+    const nextPinned = !isRecordingPinned(recording);
+    setLoading(true);
+    try {
+      await patchRecording(recording, { pinned_to_profile: nextPinned, is_pinned: nextPinned });
+      setSaveSuccessMessage(nextPinned ? 'Tallenne kiinnitetty profiiliin.' : 'Tallenteen kiinnitys poistettu.');
+    } catch (error) {
+      console.error('Recording pin update failed:', error);
+      setRefreshError(error instanceof Error ? error.message : 'Tallenteen kiinnitys epäonnistui.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const toggleRecordingVisibility = async (recording: Post) => {
+    const nextVisibility: RecordingVisibility = getRecordingVisibility(recording) === 'public' ? 'private' : 'public';
+    setLoading(true);
+    try {
+      await patchRecording(recording, { visibility: nextVisibility });
+      setSaveSuccessMessage(nextVisibility === 'public' ? 'Tallenne on nyt julkinen.' : 'Tallenne on nyt yksityinen.');
+    } catch (error) {
+      console.error('Recording visibility update failed:', error);
+      setRefreshError(error instanceof Error ? error.message : 'Tallenteen näkyvyyden päivitys epäonnistui.');
+    } finally {
+      setLoading(false);
+    }
   };
 
   const pickRecordingThumbnail = async () => {
@@ -500,22 +566,15 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
     if (!editingRecording) return;
     setLoading(true);
     try {
-      const response = await apiFetch(`/posts/${editingRecording.post_id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          title: recordingTitleDraft,
-          text: recordingDescriptionDraft,
-          image: recordingThumbnailDraft,
-          thumbnailUrl: recordingThumbnailDraft,
-        }),
+      await patchRecording(editingRecording, {
+        title: recordingTitleDraft,
+        text: recordingDescriptionDraft,
+        image: recordingThumbnailDraft,
+        thumbnailUrl: recordingThumbnailDraft,
+        visibility: recordingVisibilityDraft,
+        pinned_to_profile: recordingPinnedDraft,
+        is_pinned: recordingPinnedDraft,
       });
-      if (!response?.ok) {
-        const message = response ? await extractApiErrorMessage(response, 'Tallenteen päivitys epäonnistui.') : 'Tallenteen päivitys epäonnistui.';
-        throw new Error(message);
-      }
-      const updated = await response.json();
-      setRecordings((current) => current.map((item) => item.post_id === updated.post_id ? { ...item, ...updated } : item));
       setRecordingEditorVisible(false);
       setEditingRecording(null);
       setSaveSuccessMessage('Tallenne päivitetty.');
@@ -1075,6 +1134,24 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                             {formatReplayDate(recording.created_at)}
                           </Text>
                         </View>
+                        <View style={[styles.recordingStatusRow, isRTL && styles.rowReverseWrap]}>
+                          {isRecordingPinned(recording) ? (
+                            <View style={styles.recordingPinnedBadge}>
+                              <Ionicons name="pin" size={12} color="#fde68a" />
+                              <Text style={styles.recordingPinnedText}>Kiinnitetty</Text>
+                            </View>
+                          ) : null}
+                          <View style={styles.recordingVisibilityBadge}>
+                            <Ionicons
+                              name={getRecordingVisibility(recording) === 'public' ? 'earth-outline' : 'lock-closed-outline'}
+                              size={12}
+                              color={getRecordingVisibility(recording) === 'public' ? '#bbf7d0' : '#c4b5fd'}
+                            />
+                            <Text style={styles.recordingVisibilityText}>
+                              {getRecordingVisibility(recording) === 'public' ? 'Julkinen' : 'Yksityinen'}
+                            </Text>
+                          </View>
+                        </View>
                         <Text style={[styles.recordingCardTitle, isRTL && styles.textRight]} numberOfLines={2}>
                           {recording.title || recording.text || 'YOSLA Live -tallenne'}
                         </Text>
@@ -1120,6 +1197,29 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                           >
                             <Ionicons name="create-outline" size={15} color="#0f172a" />
                             <Text style={styles.recordingActionText}>Muokkaa</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.recordingActionButton}
+                            onPress={() => copyRecordingLink(recording)}
+                          >
+                            <Ionicons name="link-outline" size={15} color="#0f172a" />
+                            <Text style={styles.recordingActionText}>Kopioi</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.recordingActionButton, isRecordingPinned(recording) && styles.recordingPinnedActionButton]}
+                            onPress={() => toggleRecordingPinned(recording)}
+                            disabled={loading}
+                          >
+                            <Ionicons name={isRecordingPinned(recording) ? 'pin' : 'pin-outline'} size={15} color="#0f172a" />
+                            <Text style={styles.recordingActionText}>{isRecordingPinned(recording) ? 'Irrota' : 'Kiinnitä'}</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.recordingActionButton}
+                            onPress={() => toggleRecordingVisibility(recording)}
+                            disabled={loading}
+                          >
+                            <Ionicons name={getRecordingVisibility(recording) === 'public' ? 'lock-closed-outline' : 'earth-outline'} size={15} color="#0f172a" />
+                            <Text style={styles.recordingActionText}>{getRecordingVisibility(recording) === 'public' ? 'Yksityinen' : 'Julkinen'}</Text>
                           </TouchableOpacity>
                           <TouchableOpacity
                             style={[styles.recordingActionButton, styles.recordingDeleteButton]}
@@ -1438,6 +1538,47 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
               placeholderTextColor="#64748b"
               multiline
             />
+            <Text style={styles.recordingEditorLabel}>Näkyvyys</Text>
+            <View style={styles.recordingVisibilityControl}>
+              {(['public', 'private'] as RecordingVisibility[]).map((visibility) => (
+                <TouchableOpacity
+                  key={visibility}
+                  style={[
+                    styles.recordingVisibilityOption,
+                    recordingVisibilityDraft === visibility && styles.recordingVisibilityOptionActive,
+                  ]}
+                  onPress={() => setRecordingVisibilityDraft(visibility)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: recordingVisibilityDraft === visibility }}
+                >
+                  <Ionicons
+                    name={visibility === 'public' ? 'earth-outline' : 'lock-closed-outline'}
+                    size={16}
+                    color={recordingVisibilityDraft === visibility ? '#020617' : '#cbd5e1'}
+                  />
+                  <Text
+                    style={[
+                      styles.recordingVisibilityOptionText,
+                      recordingVisibilityDraft === visibility && styles.recordingVisibilityOptionTextActive,
+                    ]}
+                  >
+                    {visibility === 'public' ? 'Julkinen' : 'Yksityinen'}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={[styles.recordingPinToggle, recordingPinnedDraft && styles.recordingPinToggleActive]}
+              onPress={() => setRecordingPinnedDraft((current) => !current)}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: recordingPinnedDraft }}
+            >
+              <Ionicons name={recordingPinnedDraft ? 'pin' : 'pin-outline'} size={17} color={recordingPinnedDraft ? '#fde68a' : '#cbd5e1'} />
+              <View style={styles.recordingPinToggleTextWrap}>
+                <Text style={styles.recordingPinToggleTitle}>Kiinnitä profiiliin</Text>
+                <Text style={styles.recordingPinToggleSubtitle}>Näytä tallenne oman profiilin kärjessä.</Text>
+              </View>
+            </TouchableOpacity>
             <Text style={styles.recordingEditorLabel}>Kansikuva</Text>
             <View style={styles.recordingThumbnailPanel}>
               {recordingThumbnailDraft ? (
@@ -2164,6 +2305,44 @@ const styles = StyleSheet.create({
     gap: 8,
     marginBottom: 9,
   },
+  recordingStatusRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+    marginBottom: 8,
+  },
+  recordingPinnedBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(120,53,15,0.58)',
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.44)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  recordingPinnedText: {
+    color: '#fde68a',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  recordingVisibilityBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  recordingVisibilityText: {
+    color: '#e2e8f0',
+    fontSize: 10,
+    fontWeight: '900',
+  },
   recordingCreatorBadge: {
     minWidth: 0,
     flexDirection: 'row',
@@ -2253,6 +2432,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#e0f2fe',
     paddingVertical: 9,
     paddingHorizontal: 10,
+  },
+  recordingPinnedActionButton: {
+    backgroundColor: '#fde68a',
   },
   recordingActionText: {
     color: '#0f172a',
@@ -2582,6 +2764,67 @@ const styles = StyleSheet.create({
   recordingEditorTextarea: {
     minHeight: 92,
     textAlignVertical: 'top',
+  },
+  recordingVisibilityControl: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 12,
+  },
+  recordingVisibilityOption: {
+    flex: 1,
+    minHeight: 42,
+    borderRadius: 13,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#020617',
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+    gap: 7,
+  },
+  recordingVisibilityOptionActive: {
+    borderColor: '#7dd3fc',
+    backgroundColor: '#bae6fd',
+  },
+  recordingVisibilityOptionText: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  recordingVisibilityOptionTextActive: {
+    color: '#020617',
+  },
+  recordingPinToggle: {
+    marginBottom: 13,
+    minHeight: 56,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: '#020617',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  recordingPinToggleActive: {
+    borderColor: 'rgba(251,191,36,0.68)',
+    backgroundColor: 'rgba(120,53,15,0.36)',
+  },
+  recordingPinToggleTextWrap: {
+    flex: 1,
+    minWidth: 0,
+  },
+  recordingPinToggleTitle: {
+    color: '#f8fafc',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  recordingPinToggleSubtitle: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 2,
   },
   recordingThumbnailPanel: {
     borderWidth: 1,
