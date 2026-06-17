@@ -1003,20 +1003,50 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                           <View style={styles.recordingReplayDot} />
                           <Text style={styles.recordingReplayText}>LIVE REPLAY</Text>
                         </View>
-                        <Text style={styles.recordingDuration}>{formatReplayDuration(recording.duration || 0)}</Text>
+                        <View style={styles.recordingThumbOverlay}>
+                          <Text style={styles.recordingDuration}>{formatReplayDuration(recording.duration || 0)}</Text>
+                          <View style={styles.recordingThumbMetricRow}>
+                            <View style={styles.recordingThumbMetricPill}>
+                              <Ionicons name="eye-outline" size={11} color="#bfdbfe" />
+                              <Text style={styles.recordingThumbMetricText}>{formatCompactCount(recording.views || 0)}</Text>
+                            </View>
+                            <View style={styles.recordingThumbMetricPill}>
+                              <Ionicons name="repeat-outline" size={11} color="#ddd6fe" />
+                              <Text style={styles.recordingThumbMetricText}>{formatCompactCount(recording.replay_count || 0)}</Text>
+                            </View>
+                          </View>
+                        </View>
                       </TouchableOpacity>
                       <View style={styles.recordingBody}>
+                        <View style={[styles.recordingMetaTopRow, isRTL && styles.rowReverse]}>
+                          <View style={styles.recordingCreatorBadge}>
+                            <Ionicons name="person-circle-outline" size={14} color="#93c5fd" />
+                            <Text style={styles.recordingCreatorText}>@{recording.username || user?.username || 'creator'}</Text>
+                          </View>
+                          <Text style={[styles.recordingCardDate, isRTL && styles.textRight]}>
+                            {formatReplayDate(recording.created_at)}
+                          </Text>
+                        </View>
                         <Text style={[styles.recordingCardTitle, isRTL && styles.textRight]} numberOfLines={2}>
                           {recording.title || recording.text || 'YOSLA Live -tallenne'}
                         </Text>
-                        <Text style={[styles.recordingCardDate, isRTL && styles.textRight]}>
-                          {formatReplayDate(recording.created_at)}
-                        </Text>
                         <View style={[styles.recordingStatsRow, isRTL && styles.rowReverseWrap]}>
-                          <Text style={styles.recordingStat}>👁 {formatCompactCount(recording.views || 0)}</Text>
-                          <Text style={styles.recordingStat}>❤️ {formatCompactCount(recording.likes_count || 0)}</Text>
-                          <Text style={styles.recordingStat}>💬 {formatCompactCount(recording.comments_count || 0)}</Text>
-                          <Text style={styles.recordingStat}>🔁 {formatCompactCount(recording.replay_count || 0)}</Text>
+                          <View style={styles.recordingStatPill}>
+                            <Ionicons name="eye-outline" size={12} color="#bfdbfe" />
+                            <Text style={styles.recordingStat}>Views {formatCompactCount(recording.views || 0)}</Text>
+                          </View>
+                          <View style={styles.recordingStatPill}>
+                            <Ionicons name="heart-outline" size={12} color="#fecaca" />
+                            <Text style={styles.recordingStat}>Likes {formatCompactCount(recording.likes_count || 0)}</Text>
+                          </View>
+                          <View style={styles.recordingStatPill}>
+                            <Ionicons name="chatbubble-outline" size={12} color="#bae6fd" />
+                            <Text style={styles.recordingStat}>Comments {formatCompactCount(recording.comments_count || 0)}</Text>
+                          </View>
+                          <View style={styles.recordingStatPill}>
+                            <Ionicons name="repeat-outline" size={12} color="#ddd6fe" />
+                            <Text style={styles.recordingStat}>Replays {formatCompactCount(recording.replay_count || 0)}</Text>
+                          </View>
                         </View>
                         <View style={[styles.recordingActionsRow, isRTL && styles.rowReverse]}>
                           <TouchableOpacity
@@ -1948,14 +1978,19 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#243244',
-    backgroundColor: '#0f172a',
+    borderColor: 'rgba(248,113,113,0.42)',
+    backgroundColor: '#07111f',
+    shadowColor: '#dc2626',
+    shadowOpacity: 0.16,
+    shadowRadius: 18,
   },
   recordingThumb: {
     width: '100%',
     aspectRatio: 16 / 9,
     backgroundColor: '#020617',
     position: 'relative',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(248,113,113,0.24)',
   },
   recordingThumbImage: {
     width: '100%',
@@ -1975,7 +2010,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderRadius: 999,
-    backgroundColor: 'rgba(220, 38, 38, 0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.35)',
+    backgroundColor: 'rgba(220,38,38,0.22)',
     paddingHorizontal: 9,
     paddingVertical: 5,
   },
@@ -1983,28 +2020,81 @@ const styles = StyleSheet.create({
     width: 7,
     height: 7,
     borderRadius: 4,
-    backgroundColor: '#fff',
+    backgroundColor: '#ef4444',
   },
   recordingReplayText: {
-    color: '#fff',
+    color: '#fecaca',
     fontSize: 10,
     fontWeight: '900',
   },
-  recordingDuration: {
+  recordingThumbOverlay: {
     position: 'absolute',
+    left: 10,
     right: 10,
     bottom: 10,
-    overflow: 'hidden',
-    borderRadius: 8,
-    backgroundColor: 'rgba(2, 6, 23, 0.82)',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.42)',
+    backgroundColor: 'rgba(2,6,23,0.86)',
+    paddingHorizontal: 9,
+    paddingVertical: 8,
+    gap: 7,
+    shadowColor: '#ef4444',
+    shadowOpacity: 0.2,
+    shadowRadius: 12,
+  },
+  recordingDuration: {
     color: '#f8fafc',
-    paddingHorizontal: 8,
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  recordingThumbMetricRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  recordingThumbMetricPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.9)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    paddingHorizontal: 7,
     paddingVertical: 4,
-    fontSize: 11,
+  },
+  recordingThumbMetricText: {
+    color: '#e2e8f0',
+    fontSize: 10,
     fontWeight: '900',
   },
   recordingBody: {
     padding: 12,
+  },
+  recordingMetaTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+    marginBottom: 9,
+  },
+  recordingCreatorBadge: {
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderRadius: 999,
+    backgroundColor: 'rgba(37,99,235,0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.24)',
+    paddingHorizontal: 7,
+    paddingVertical: 4,
+  },
+  recordingCreatorText: {
+    color: '#bfdbfe',
+    fontSize: 10,
+    fontWeight: '900',
   },
   recordingCardTitle: {
     color: '#f8fafc',
@@ -2013,7 +2103,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   recordingCardDate: {
-    marginTop: 4,
     color: '#94a3b8',
     fontSize: 11,
     fontWeight: '800',
@@ -2022,11 +2111,22 @@ const styles = StyleSheet.create({
     marginTop: 10,
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: 8,
+    gap: 7,
+  },
+  recordingStatPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(15,23,42,0.92)',
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.18)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
   },
   recordingStat: {
-    color: '#cbd5e1',
-    fontSize: 11,
+    color: '#e2e8f0',
+    fontSize: 10,
     fontWeight: '900',
   },
   recordingActionsRow: {
