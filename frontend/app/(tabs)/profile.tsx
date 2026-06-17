@@ -66,6 +66,9 @@ const getRecordingVisibility = (recording?: Pick<Post, 'visibility'> | null): Re
 const isRecordingPinned = (recording?: Pick<Post, 'pinned_to_profile' | 'is_pinned'> | null) =>
   Boolean(recording?.pinned_to_profile || recording?.is_pinned);
 
+const getRecordingThumbnail = (recording?: Pick<Post, 'image' | 'thumbnailUrl' | 'thumbnail_url'> | null) =>
+  recording?.image || recording?.thumbnailUrl || recording?.thumbnail_url || '';
+
 type ProfileViewMode = 'profile' | 'saved' | 'settings';
 type ProfileContentTab = 'posts' | 'recordings' | 'saved' | 'likes';
 type RecordingSortMode = 'newest' | 'oldest' | 'longest' | 'popular';
@@ -174,6 +177,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
   const [recordingTitleDraft, setRecordingTitleDraft] = useState('');
   const [recordingDescriptionDraft, setRecordingDescriptionDraft] = useState('');
   const [recordingThumbnailDraft, setRecordingThumbnailDraft] = useState('');
+  const [recordingOriginalThumbnail, setRecordingOriginalThumbnail] = useState('');
   const [recordingVisibilityDraft, setRecordingVisibilityDraft] = useState<RecordingVisibility>('public');
   const [recordingPinnedDraft, setRecordingPinnedDraft] = useState(false);
   const [achievementsPayload, setAchievementsPayload] = useState<AchievementsPayload | null>(null);
@@ -450,6 +454,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
   const pinnedProfileRecordings = sortedRecordings.filter(isRecordingPinned).slice(0, 2);
+  const thumbnailDraftChanged = recordingThumbnailDraft !== recordingOriginalThumbnail;
   const recordingAnalytics = recordings.reduce(
     (summary, recording) => ({
       views: summary.views + Number(recording.views || 0),
@@ -465,10 +470,12 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
     : 0;
 
   const openRecordingEditor = (recording: Post) => {
+    const thumbnail = getRecordingThumbnail(recording);
     setEditingRecording(recording);
     setRecordingTitleDraft(recording.title || '');
     setRecordingDescriptionDraft(recording.text || '');
-    setRecordingThumbnailDraft(recording.image || recording.thumbnailUrl || recording.thumbnail_url || '');
+    setRecordingThumbnailDraft(thumbnail);
+    setRecordingOriginalThumbnail(thumbnail);
     setRecordingVisibilityDraft(getRecordingVisibility(recording));
     setRecordingPinnedDraft(isRecordingPinned(recording));
     setRecordingEditorVisible(true);
@@ -582,6 +589,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
       });
       setRecordingEditorVisible(false);
       setEditingRecording(null);
+      setRecordingOriginalThumbnail('');
       setSaveSuccessMessage('Tallenne päivitetty.');
     } catch (error) {
       console.error('Recording update failed:', error);
@@ -1005,7 +1013,7 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
               </View>
               <View style={[styles.pinnedRecordingsGrid, isRTL && styles.rowReverseWrap]}>
                 {pinnedProfileRecordings.map((recording) => {
-                  const thumbnail = recording.image || recording.thumbnailUrl || recording.thumbnail_url || '';
+                  const thumbnail = getRecordingThumbnail(recording);
                   return (
                     <TouchableOpacity
                       key={recording.post_id}
@@ -1170,14 +1178,15 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                         accessibilityRole="button"
                         accessibilityLabel={`Avaa tallenne ${recording.title || recording.text || 'Live-tallenne'}`}
                       >
-                        {recording.image || recording.thumbnailUrl || recording.thumbnail_url ? (
+                        {getRecordingThumbnail(recording) ? (
                           <Image
-                            source={{ uri: recording.image || recording.thumbnailUrl || recording.thumbnail_url || '' }}
+                            source={{ uri: getRecordingThumbnail(recording) }}
                             style={styles.recordingThumbImage}
                           />
                         ) : (
                           <View style={styles.recordingThumbFallback}>
                             <Ionicons name="play-circle" size={42} color="#e0f2fe" />
+                            <Text style={styles.recordingMissingThumbnailText}>Kansikuva puuttuu</Text>
                           </View>
                         )}
                         <View style={styles.recordingReplayBadge}>
@@ -1676,6 +1685,15 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
             </TouchableOpacity>
             <Text style={styles.recordingEditorLabel}>Kansikuva</Text>
             <View style={styles.recordingThumbnailPanel}>
+              <View style={styles.recordingThumbnailHeaderRow}>
+                <Text style={styles.recordingThumbnailPreviewLabel}>Esikatselu ennen tallennusta</Text>
+                {thumbnailDraftChanged ? (
+                  <View style={styles.recordingThumbnailPendingBadge}>
+                    <Ionicons name="sparkles-outline" size={12} color="#fde68a" />
+                    <Text style={styles.recordingThumbnailPendingText}>Odottaa tallennusta</Text>
+                  </View>
+                ) : null}
+              </View>
               {recordingThumbnailDraft ? (
                 <Image source={{ uri: recordingThumbnailDraft }} style={styles.recordingThumbnailPreview} />
               ) : (
@@ -1715,6 +1733,13 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                 autoCapitalize="none"
                 autoCorrect={false}
               />
+              <Text style={styles.recordingThumbnailHelperText}>
+                {thumbnailDraftChanged
+                  ? recordingThumbnailDraft
+                    ? 'Uusi kansikuva julkaistaan, kun tallennat muutokset.'
+                    : 'Kansikuva poistetaan, kun tallennat muutokset.'
+                  : 'Valitse kuva tai liita URL, ja tarkista esikatselu ennen tallennusta.'}
+              </Text>
             </View>
             <View style={styles.recordingEditorActions}>
               <TouchableOpacity
@@ -2465,7 +2490,13 @@ const styles = StyleSheet.create({
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 7,
     backgroundColor: '#111827',
+  },
+  recordingMissingThumbnailText: {
+    color: '#bfdbfe',
+    fontSize: 11,
+    fontWeight: '900',
   },
   recordingReplayBadge: {
     position: 'absolute',
@@ -3081,6 +3112,35 @@ const styles = StyleSheet.create({
     padding: 10,
     marginBottom: 13,
   },
+  recordingThumbnailHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
+  },
+  recordingThumbnailPreviewLabel: {
+    color: '#cbd5e1',
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  recordingThumbnailPendingBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(251,191,36,0.42)',
+    backgroundColor: 'rgba(120,53,15,0.34)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  recordingThumbnailPendingText: {
+    color: '#fde68a',
+    fontSize: 10,
+    fontWeight: '900',
+  },
   recordingThumbnailPreview: {
     width: '100%',
     aspectRatio: 16 / 9,
@@ -3139,6 +3199,13 @@ const styles = StyleSheet.create({
   },
   recordingThumbnailUrlInput: {
     marginBottom: 0,
+  },
+  recordingThumbnailHelperText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 16,
+    marginTop: 9,
   },
   recordingEditorActions: {
     flexDirection: 'row',

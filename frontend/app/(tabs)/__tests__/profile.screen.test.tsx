@@ -277,7 +277,82 @@ describe('ProfileScreen save button state', () => {
     expect(await findByText('Recordings 1')).toBeTruthy();
     fireEvent.press(getByText('Recordings 1'));
 
+    expect(getByText('Kansikuva puuttuu')).toBeTruthy();
     expect(getByLabelText('Yksityistä tallennetta ei voi jakaa linkillä')).toBeTruthy();
+    restore();
+  });
+
+  test('saves recording thumbnail URL through the edit modal', async () => {
+    mockUseFocusEffect.mockImplementation((callback: () => void) => {
+      React.useEffect(callback, [callback]);
+    });
+    const requests: { path: string; options?: { method?: string; body?: string } }[] = [];
+    const restore = setProfileUpdateMock(async (path: string, options?: { method?: string; body?: string }) => {
+      requests.push({ path, options });
+      if (path.startsWith('/media/posts')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ([
+            {
+              post_id: 'post_thumb_live',
+              user_id: 'u1',
+              username: 'tester',
+              text: 'Tallenne: #Taide',
+              title: 'Tallenne: #Taide',
+              image: 'https://example.com/old.jpg',
+              video: 'https://example.com/thumb.webm',
+              duration: 90,
+              type: 'live_recording',
+              source: 'live_replay',
+              pinned_to_profile: false,
+              visibility: 'public',
+              likes_count: 0,
+              comments_count: 0,
+              views: 0,
+              replay_count: 0,
+              is_liked: false,
+              created_at: '2026-06-17T12:00:00.000Z',
+            },
+          ]),
+        };
+      }
+      if (path === '/posts/post_thumb_live' && options?.method === 'PATCH') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            post_id: 'post_thumb_live',
+            image: 'https://example.com/new.jpg',
+            thumbnailUrl: 'https://example.com/new.jpg',
+          }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ unread_count: 0, posts_count: 1, followers_count: 2, following_count: 3 }),
+      };
+    });
+
+    const { findByText, getByPlaceholderText, getByText, getAllByText } = renderProfileScreen('profile');
+
+    expect(await findByText('Recordings 1')).toBeTruthy();
+    fireEvent.press(getByText('Recordings 1'));
+    fireEvent.press(getByText('Muokkaa'));
+    fireEvent.changeText(getByPlaceholderText('Tai liitä kansikuvan URL'), 'https://example.com/new.jpg');
+
+    expect(getByText('Odottaa tallennusta')).toBeTruthy();
+    expect(getByText('Uusi kansikuva julkaistaan, kun tallennat muutokset.')).toBeTruthy();
+
+    fireEvent.press(getAllByText('Tallenna').at(-1));
+
+    expect(await findByText('Tallenne päivitetty.')).toBeTruthy();
+    const patchRequest = requests.find((request) => request.path === '/posts/post_thumb_live' && request.options?.method === 'PATCH');
+    expect(JSON.parse(patchRequest?.options?.body || '{}')).toMatchObject({
+      image: 'https://example.com/new.jpg',
+      thumbnailUrl: 'https://example.com/new.jpg',
+    });
     restore();
   });
 
