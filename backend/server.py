@@ -3136,6 +3136,10 @@ def get_sqlite_connection() -> sqlite3.Connection:
     except Exception:
         pass
     try:
+        cursor.execute("ALTER TABLE posts ADD COLUMN pinned_to_profile INTEGER DEFAULT 0")
+    except Exception:
+        pass
+    try:
         cursor.execute("ALTER TABLE posts ADD COLUMN status TEXT DEFAULT 'ready'")
     except Exception:
         pass
