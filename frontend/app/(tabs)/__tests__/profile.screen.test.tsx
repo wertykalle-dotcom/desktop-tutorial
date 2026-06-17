@@ -71,6 +71,8 @@ const mockApiFetch: jest.Mock = jest.fn(async () => ({
   status: 200,
   json: async () => ({ unread_count: 0, posts_count: 1, followers_count: 2, following_count: 3 }),
 }));
+const mockRouterPush = jest.fn();
+const mockUseFocusEffect = jest.fn();
 
 jest.mock('../../../src/contexts/AuthContext', () => ({
   useAuth: () => mockAuthValue,
@@ -92,10 +94,10 @@ jest.mock('../../../src/contexts/I18nContext', () => ({
 
 jest.mock('expo-router', () => ({
   useRouter: () => ({
-    push: jest.fn(),
+    push: mockRouterPush,
     replace: jest.fn(),
   }),
-  useFocusEffect: jest.fn(),
+  useFocusEffect: mockUseFocusEffect,
 }));
 
 jest.mock('@expo/vector-icons', () => ({
@@ -139,6 +141,8 @@ const setProfileUpdateMock = (implementation: typeof mockApiFetch extends jest.M
 
 afterEach(() => {
   jest.useRealTimers();
+  mockRouterPush.mockReset();
+  mockUseFocusEffect.mockReset();
   mockApiFetch.mockReset();
   mockApiFetch.mockImplementation(async () => ({
     ok: true,
@@ -163,6 +167,69 @@ describe('ProfileScreen save button state', () => {
     expect(getByText('Asetukset')).toBeTruthy();
     expect(getByText('Tallennetut')).toBeTruthy();
     expect(getByText('Kieli, parisuhdestatus, turvallisuus ja uloskirjautuminen.')).toBeTruthy();
+  });
+
+  test('shows pinned live recordings on the main profile tab', async () => {
+    mockUseFocusEffect.mockImplementation((callback: () => void) => {
+      React.useEffect(callback, [callback]);
+    });
+    const restore = setProfileUpdateMock(async (path: string) => {
+      if (path.startsWith('/media/posts')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ([
+            {
+              post_id: 'post_live_1',
+              user_id: 'u1',
+              username: 'tester',
+              text: 'Tallenne: #Luonto',
+              title: 'Tallenne: #Luonto',
+              image: 'https://example.com/thumb.jpg',
+              video: 'https://example.com/live.webm',
+              duration: 45,
+              type: 'live_recording',
+              source: 'live_replay',
+              pinned_to_profile: true,
+              visibility: 'public',
+              likes_count: 3,
+              comments_count: 2,
+              views: 12,
+              replay_count: 4,
+              is_liked: false,
+              created_at: '2026-06-17T12:00:00.000Z',
+            },
+          ]),
+        };
+      }
+      if (path === '/growth/achievements') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ achievements: [], creator_level: { level: 1, name: 'Starter', score: 0, progress: 5 } }),
+        };
+      }
+      if (path === '/growth/creator-level') {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ level: 1, name: 'Starter', score: 0, progress: 5 }),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ unread_count: 0, posts_count: 1, followers_count: 2, following_count: 3 }),
+      };
+    });
+
+    const { findByText, getByText } = renderProfileScreen('profile');
+
+    expect(await findByText('Kiinnitetyt replayt')).toBeTruthy();
+    expect(getByText('Profiilin live-tallenteet')).toBeTruthy();
+    expect(getByText('Tallenne: #Luonto')).toBeTruthy();
+    expect(getByText('45 s live')).toBeTruthy();
+    restore();
   });
 
   test('enables save only for valid changed username', () => {
