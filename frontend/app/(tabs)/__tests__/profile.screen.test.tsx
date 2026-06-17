@@ -232,6 +232,55 @@ describe('ProfileScreen save button state', () => {
     restore();
   });
 
+  test('locks copy link action for private recordings', async () => {
+    mockUseFocusEffect.mockImplementation((callback: () => void) => {
+      React.useEffect(callback, [callback]);
+    });
+    const restore = setProfileUpdateMock(async (path: string) => {
+      if (path.startsWith('/media/posts')) {
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ([
+            {
+              post_id: 'post_private_live',
+              user_id: 'u1',
+              username: 'tester',
+              text: 'Tallenne: #Musiikki',
+              title: 'Tallenne: #Musiikki',
+              image: '',
+              video: 'https://example.com/private.webm',
+              duration: 75,
+              type: 'live_recording',
+              source: 'live_replay',
+              pinned_to_profile: false,
+              visibility: 'private',
+              likes_count: 0,
+              comments_count: 0,
+              views: 0,
+              replay_count: 0,
+              is_liked: false,
+              created_at: '2026-06-17T12:00:00.000Z',
+            },
+          ]),
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ unread_count: 0, posts_count: 1, followers_count: 2, following_count: 3 }),
+      };
+    });
+
+    const { findByText, getByLabelText, getByText } = renderProfileScreen('profile');
+
+    expect(await findByText('Recordings 1')).toBeTruthy();
+    fireEvent.press(getByText('Recordings 1'));
+
+    expect(getByLabelText('Yksityistä tallennetta ei voi jakaa linkillä')).toBeTruthy();
+    restore();
+  });
+
   test('enables save only for valid changed username', () => {
     const { getByText, getByPlaceholderText, getByLabelText } = renderProfileScreen();
 

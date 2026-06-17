@@ -490,6 +490,10 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
   };
 
   const copyRecordingLink = async (recording: Post) => {
+    if (getRecordingVisibility(recording) !== 'public') {
+      setSaveSuccessMessage('Yksityistä tallennetta ei voi jakaa linkillä.');
+      return;
+    }
     try {
       await copyPostLink(recording, setSaveSuccessMessage);
     } catch (error) {
@@ -1269,11 +1273,32 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                             <Text style={styles.recordingActionText}>Muokkaa</Text>
                           </TouchableOpacity>
                           <TouchableOpacity
-                            style={styles.recordingActionButton}
+                            style={[
+                              styles.recordingActionButton,
+                              getRecordingVisibility(recording) !== 'public' && styles.recordingDisabledActionButton,
+                            ]}
                             onPress={() => copyRecordingLink(recording)}
+                            disabled={getRecordingVisibility(recording) !== 'public'}
+                            accessibilityRole="button"
+                            accessibilityLabel={
+                              getRecordingVisibility(recording) === 'public'
+                                ? 'Kopioi tallenteen linkki'
+                                : 'Yksityistä tallennetta ei voi jakaa linkillä'
+                            }
                           >
-                            <Ionicons name="link-outline" size={15} color="#0f172a" />
-                            <Text style={styles.recordingActionText}>Kopioi</Text>
+                            <Ionicons
+                              name={getRecordingVisibility(recording) === 'public' ? 'link-outline' : 'lock-closed-outline'}
+                              size={15}
+                              color={getRecordingVisibility(recording) === 'public' ? '#0f172a' : '#64748b'}
+                            />
+                            <Text
+                              style={[
+                                styles.recordingActionText,
+                                getRecordingVisibility(recording) !== 'public' && styles.recordingDisabledActionText,
+                              ]}
+                            >
+                              Kopioi
+                            </Text>
                           </TouchableOpacity>
                           <TouchableOpacity
                             style={[styles.recordingActionButton, isRecordingPinned(recording) && styles.recordingPinnedActionButton]}
@@ -2650,10 +2675,18 @@ const styles = StyleSheet.create({
   recordingPinnedActionButton: {
     backgroundColor: '#fde68a',
   },
+  recordingDisabledActionButton: {
+    backgroundColor: '#1e293b',
+    borderWidth: 1,
+    borderColor: '#334155',
+  },
   recordingActionText: {
     color: '#0f172a',
     fontSize: 12,
     fontWeight: '900',
+  },
+  recordingDisabledActionText: {
+    color: '#64748b',
   },
   recordingDeleteButton: {
     backgroundColor: '#7f1d1d',
