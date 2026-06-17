@@ -112,6 +112,19 @@ const formatHealthDate = (value?: string | null) => {
   return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
 };
 
+const formatWatchTime = (seconds?: number | null) => {
+  const totalSeconds = Math.max(0, Math.round(Number(seconds || 0)));
+  if (totalSeconds < 60) return `${totalSeconds} s`;
+  const minutes = Math.floor(totalSeconds / 60);
+  const remainingSeconds = totalSeconds % 60;
+  if (minutes < 60) return remainingSeconds ? `${minutes} min ${remainingSeconds} s` : `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours} h ${remainingMinutes} min` : `${hours} h`;
+};
+
+const formatCompletionRate = (value?: number | null) => `${Math.max(0, Math.min(100, Math.round(Number(value || 0))))}%`;
+
 const getSavedPostCategory = (post: Post): SavedCategoryKey => {
   const metadata = post as Post & { type?: string | null; source?: string | null; is_clip?: boolean; campaign_id?: string | null };
   const text = post.text || '';
@@ -424,6 +437,19 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
     if (recordingSortMode === 'popular') return ((b.views || 0) + (b.likes_count || 0) * 2 + (b.comments_count || 0) * 3) - ((a.views || 0) + (a.likes_count || 0) * 2 + (a.comments_count || 0) * 3);
     return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
   });
+  const recordingAnalytics = recordings.reduce(
+    (summary, recording) => ({
+      views: summary.views + Number(recording.views || 0),
+      replays: summary.replays + Number(recording.replay_count || 0),
+      watchTime: summary.watchTime + Number(recording.watch_time || 0),
+      completionTotal: summary.completionTotal + Number(recording.completion_rate || 0),
+      completionSamples: summary.completionSamples + (Number(recording.completion_rate || 0) > 0 ? 1 : 0),
+    }),
+    { views: 0, replays: 0, watchTime: 0, completionTotal: 0, completionSamples: 0 }
+  );
+  const averageRecordingCompletion = recordingAnalytics.completionSamples
+    ? recordingAnalytics.completionTotal / recordingAnalytics.completionSamples
+    : 0;
 
   const openRecordingEditor = (recording: Post) => {
     setEditingRecording(recording);
@@ -979,6 +1005,28 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                   </TouchableOpacity>
                 ))}
               </View>
+              <View style={[styles.recordingAnalyticsGrid, isRTL && styles.rowReverseWrap]}>
+                <View style={styles.recordingAnalyticsCard}>
+                  <Ionicons name="eye-outline" size={16} color="#bfdbfe" />
+                  <Text style={styles.recordingAnalyticsValue}>{formatCompactCount(recordingAnalytics.views)}</Text>
+                  <Text style={styles.recordingAnalyticsLabel}>Views yhteensä</Text>
+                </View>
+                <View style={styles.recordingAnalyticsCard}>
+                  <Ionicons name="repeat-outline" size={16} color="#ddd6fe" />
+                  <Text style={styles.recordingAnalyticsValue}>{formatCompactCount(recordingAnalytics.replays)}</Text>
+                  <Text style={styles.recordingAnalyticsLabel}>Replayt</Text>
+                </View>
+                <View style={styles.recordingAnalyticsCard}>
+                  <Ionicons name="time-outline" size={16} color="#bbf7d0" />
+                  <Text style={styles.recordingAnalyticsValue}>{formatWatchTime(recordingAnalytics.watchTime)}</Text>
+                  <Text style={styles.recordingAnalyticsLabel}>Watch time</Text>
+                </View>
+                <View style={styles.recordingAnalyticsCard}>
+                  <Ionicons name="analytics-outline" size={16} color="#fef3c7" />
+                  <Text style={styles.recordingAnalyticsValue}>{formatCompletionRate(averageRecordingCompletion)}</Text>
+                  <Text style={styles.recordingAnalyticsLabel}>Avg completion</Text>
+                </View>
+              </View>
               {sortedRecordings.length ? (
                 <View style={styles.recordingGrid}>
                   {sortedRecordings.map((recording) => (
@@ -1046,6 +1094,16 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                           <View style={styles.recordingStatPill}>
                             <Ionicons name="repeat-outline" size={12} color="#ddd6fe" />
                             <Text style={styles.recordingStat}>Replays {formatCompactCount(recording.replay_count || 0)}</Text>
+                          </View>
+                        </View>
+                        <View style={[styles.recordingInsightRow, isRTL && styles.rowReverseWrap]}>
+                          <View style={styles.recordingInsightPill}>
+                            <Ionicons name="time-outline" size={12} color="#bbf7d0" />
+                            <Text style={styles.recordingInsightText}>Watch {formatWatchTime(recording.watch_time || 0)}</Text>
+                          </View>
+                          <View style={styles.recordingInsightPill}>
+                            <Ionicons name="analytics-outline" size={12} color="#fef3c7" />
+                            <Text style={styles.recordingInsightText}>Completion {formatCompletionRate(recording.completion_rate || 0)}</Text>
                           </View>
                         </View>
                         <View style={[styles.recordingActionsRow, isRTL && styles.rowReverse]}>
@@ -1970,6 +2028,33 @@ const styles = StyleSheet.create({
   recordingSortTextActive: {
     color: '#f0f9ff',
   },
+  recordingAnalyticsGrid: {
+    marginTop: 13,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 9,
+  },
+  recordingAnalyticsCard: {
+    flexGrow: 1,
+    minWidth: 132,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.22)',
+    backgroundColor: 'rgba(15,23,42,0.86)',
+    padding: 11,
+    gap: 5,
+  },
+  recordingAnalyticsValue: {
+    color: '#f8fafc',
+    fontSize: 17,
+    fontWeight: '900',
+  },
+  recordingAnalyticsLabel: {
+    color: '#94a3b8',
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
   recordingGrid: {
     marginTop: 14,
     gap: 12,
@@ -2126,6 +2211,28 @@ const styles = StyleSheet.create({
   },
   recordingStat: {
     color: '#e2e8f0',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  recordingInsightRow: {
+    marginTop: 9,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 7,
+  },
+  recordingInsightPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    backgroundColor: 'rgba(2,6,23,0.72)',
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.18)',
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  recordingInsightText: {
+    color: '#cbd5e1',
     fontSize: 10,
     fontWeight: '900',
   },
