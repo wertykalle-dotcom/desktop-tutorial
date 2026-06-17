@@ -78,12 +78,13 @@ export default function RegisterScreen() {
     try {
       await register(normalizedEmail, normalizedPassword, normalizedUsername, dateOfBirth.trim(), acceptTerms, acceptPrivacy);
       router.replace('/(tabs)/feed');
-    } catch (error: any) {
-      if (String(error?.message || '').toLowerCase().includes('at least')) {
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : '';
+      if (message.toLowerCase().includes('at least')) {
         router.replace('/(auth)/age-gate?reason=underage' as never);
         return;
       }
-      Alert.alert(t('registerFailed'), error.message || t('retry'));
+      Alert.alert(t('registerFailed'), message || t('retry'));
     } finally {
       setLoading(false);
     }
