@@ -5,6 +5,8 @@ import { useAuth } from '../src/contexts/AuthContext';
 import { useI18n } from '../src/contexts/I18nContext';
 import { API_BASE } from '../src/utils/api/http';
 
+const yoslaHeroImage = require('../assets/brand/yosla-hero.png');
+
 type HomepageConfig = {
   title: string;
   subtitle: string;
@@ -45,7 +47,6 @@ export default function Index() {
   const { isReady } = useI18n();
   const router = useRouter();
   const { width } = useWindowDimensions();
-  const backendOrigin = API_BASE.replace(/\/api$/, '');
   const [homepage, setHomepage] = useState<HomepageConfig | null>(null);
   const isWide = width >= 760;
 
@@ -103,14 +104,12 @@ export default function Index() {
           </Text>
         </View>
 
-        {homepage?.hero_image_url ? (
-          <Image
-            source={{ uri: homepage.hero_image_url.startsWith('http') ? homepage.hero_image_url : `${backendOrigin}${homepage.hero_image_url}` }}
-            style={styles.heroImage}
-            resizeMode="cover"
-            accessibilityLabel={homepage.hero_image_alt || homepage.title || 'YOSLA SOME LIFE'}
-          />
-        ) : null}
+        <Image
+          source={yoslaHeroImage}
+          style={[styles.heroImage, !isWide && styles.heroImageMobile]}
+          resizeMode="cover"
+          accessibilityLabel={homepage?.hero_image_alt || homepage?.title || 'YOSLA SOME LIFE'}
+        />
 
         <View style={styles.featureCard}>
           <View style={styles.featureHeaderRow}>
@@ -325,9 +324,13 @@ const styles = StyleSheet.create({
   },
   heroImage: {
     width: '100%',
-    height: 220,
+    height: 430,
     borderRadius: 20,
     marginBottom: 20,
-    backgroundColor: '#e2e8f0',
+    backgroundColor: '#020617',
+  },
+  heroImageMobile: {
+    height: 300,
+    borderRadius: 16,
   },
 });

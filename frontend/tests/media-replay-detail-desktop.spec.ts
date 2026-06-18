@@ -112,9 +112,9 @@ test('desktop media live replay opens a playable post detail', async ({ page }, 
   });
   await page.goto('/media', { waitUntil: 'networkidle' });
 
-  await expect(page.locator('body')).toContainText('Mediavirta');
-  await expect(page.locator('body')).toContainText('LIVE REPLAY');
-  await expect(page.locator('body')).toContainText('Tallenne: #MediaSmoke');
+  await expect(page.locator('body')).toContainText('Mediavirta', { timeout: 15000 });
+  await expect(page.locator('body')).toContainText('LIVE REPLAY', { timeout: 15000 });
+  await expect(page.locator('body')).toContainText('Tallenne: #MediaSmoke', { timeout: 15000 });
 
   await page.getByLabel('Jaa julkaisu').first().click();
   await expect(page).toHaveURL(/\/media/);

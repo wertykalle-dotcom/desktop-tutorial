@@ -3,11 +3,13 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useEffect, useState } from 'react';
 import { useAuth } from '../../src/contexts/AuthContext';
-import { View, ActivityIndicator, StyleSheet, useWindowDimensions, Pressable, Text } from 'react-native';
+import { View, ActivityIndicator, Image, StyleSheet, useWindowDimensions, Pressable, Text } from 'react-native';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { hasCompletedOnboarding, isNewUserProfile } from '../../src/utils/onboarding';
 import { canModerate, isSuperAdmin } from '../../src/utils/roles';
+
+const yoslaLogoImage = require('../../assets/brand/yosla-logo.png');
 
 type ShellNavItem = {
   label: string;
@@ -109,7 +111,12 @@ function YoslaTabBar({
     <View style={styles.desktopSidebar}>
       <View style={styles.brandBlock}>
         <View style={styles.brandMark}>
-          <Text style={styles.brandMarkText}>Y</Text>
+          <Image
+            source={yoslaLogoImage}
+            style={styles.brandMarkImage}
+            resizeMode="cover"
+            accessibilityLabel="YOSLA SOME LIFE logo"
+          />
         </View>
         <View style={{ flex: 1 }}>
           <View style={styles.brandTitleRow}>
@@ -512,20 +519,22 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
   },
   brandMark: {
-    width: 44,
-    height: 44,
-    borderRadius: 12,
-    backgroundColor: '#0f62fe',
+    width: 58,
+    height: 58,
+    borderRadius: 14,
+    backgroundColor: '#020617',
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: 'rgba(250,204,21,0.38)',
     shadowColor: '#38bdf8',
     shadowOpacity: 0.35,
     shadowRadius: 16,
   },
-  brandMarkText: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '900',
+  brandMarkImage: {
+    width: '100%',
+    height: '100%',
   },
   brandTitleRow: {
     flexDirection: 'row',

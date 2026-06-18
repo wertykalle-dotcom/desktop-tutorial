@@ -1,5 +1,11 @@
 import { expect, test } from '@playwright/test';
 
+test('landing page shows the YOSLA brand hero image', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.locator('body')).toContainText('Tervetuloa YOSLA SOME LIFEEN');
+  await expect(page.getByLabel('YOSLA SOME LIFE')).toBeVisible();
+});
+
 test('feed shell loads from the local YOSLA build', async ({ page }) => {
   await page.goto('/feed');
   await expect(page.locator('body')).toContainText(/YOSLA|Kirjaudu|Feed|LIVE|Mediavirta/i);
