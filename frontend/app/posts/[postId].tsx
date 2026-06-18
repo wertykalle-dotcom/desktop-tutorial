@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
@@ -160,6 +160,8 @@ export default function PostDetailScreen() {
   const { postId, commentId } = useLocalSearchParams<{ postId: string; commentId?: string }>();
   const { token, user } = useAuth();
   const { apiFetch } = useApiClient();
+  const { width } = useWindowDimensions();
+  const isDetailDesktop = width >= 980;
   const [post, setPost] = useState<Post | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
@@ -434,71 +436,111 @@ export default function PostDetailScreen() {
           </TouchableOpacity>
         </View>
       ) : null}
-      <Text style={styles.body}>{post.text}</Text>
-      {post.moderation_status ? (
-        <View style={styles.moderationBadge}>
-          <Text style={styles.moderationBadgeText}>
-            {post.moderation_status === 'queued' ? 'Queued for review' : post.moderation_status}
-          </Text>
+      <View style={[styles.detailGrid, isDetailDesktop && styles.detailGridDesktop]}>
+        <View style={styles.detailMainColumn}>
+          <View style={styles.detailPanel}>
+            <Text style={styles.detailPanelEyebrow}>{isLiveReplay ? 'Replay-kuvaus' : 'Julkaisu'}</Text>
+            <Text style={styles.body}>{post.text}</Text>
+            {post.moderation_status ? (
+              <View style={styles.moderationBadge}>
+                <Text style={styles.moderationBadgeText}>
+                  {post.moderation_status === 'queued' ? 'Queued for review' : post.moderation_status}
+                </Text>
+              </View>
+            ) : null}
+            {post.music_risk && post.music_risk !== 'none' ? (
+              <View style={styles.musicWarningStrip}>
+                <Text style={styles.musicWarningIcon}>♪</Text>
+                <Text style={styles.musicWarningText}>
+                  Musiikkivaroitus: tämä julkaisu voi sisältää tekijänoikeuksilla suojattua ääntä. Toistuvat vahvistetut rikkomukset laskevat Trust Scorea.
+                </Text>
+              </View>
+            ) : null}
+            {(post.hashtags?.length || post.mentions?.length) ? (
+              <View style={styles.tagSection}>
+                {post.hashtags?.length ? (
+                  <View style={styles.tagRow}>
+                    {post.hashtags.map((tag) => (
+                      <View key={tag} style={[styles.tagPill, styles.hashtagPill]}>
+                        <Text style={styles.hashtagText}>{tag}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+                {post.mentions?.length ? (
+                  <View style={styles.tagRow}>
+                    {post.mentions.map((mention) => (
+                      <View key={mention} style={[styles.tagPill, styles.mentionPill]}>
+                        <Text style={styles.mentionText}>@{mention}</Text>
+                      </View>
+                    ))}
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+          </View>
         </View>
-      ) : null}
-      {post.music_risk && post.music_risk !== 'none' ? (
-        <View style={styles.musicWarningStrip}>
-          <Text style={styles.musicWarningIcon}>♪</Text>
-          <Text style={styles.musicWarningText}>
-            Musiikkivaroitus: tämä julkaisu voi sisältää tekijänoikeuksilla suojattua ääntä. Toistuvat vahvistetut rikkomukset laskevat Trust Scorea.
-          </Text>
-        </View>
-      ) : null}
-      {(post.hashtags?.length || post.mentions?.length) ? (
-        <View style={styles.tagSection}>
-          {post.hashtags?.length ? (
-            <View style={styles.tagRow}>
-              {post.hashtags.map((tag) => (
-                <View key={tag} style={[styles.tagPill, styles.hashtagPill]}>
-                  <Text style={styles.hashtagText}>{tag}</Text>
-                </View>
-              ))}
+
+        <View style={styles.detailSideColumn}>
+          <View style={styles.detailPanel}>
+            <Text style={styles.detailPanelEyebrow}>Engagement</Text>
+            <View style={styles.statsRow}>
+              <View style={styles.statCard}>
+                <Text style={styles.statValue}>{post.likes_count}</Text>
+                <Text style={styles.statLabel}>Likes</Text>
+              </View>
+              <View style={styles.statCard}>
+                <Text style={styles.statValue}>{post.comments_count}</Text>
+                <Text style={styles.statLabel}>Comments</Text>
+              </View>
             </View>
-          ) : null}
-          {post.mentions?.length ? (
-            <View style={styles.tagRow}>
-              {post.mentions.map((mention) => (
-                <View key={mention} style={[styles.tagPill, styles.mentionPill]}>
-                  <Text style={styles.mentionText}>@{mention}</Text>
+            {isLiveReplay ? (
+              <View style={styles.replayInsightStack}>
+                <View style={styles.replayInsightRow}>
+                  <Text style={styles.replayInsightLabel}>Views</Text>
+                  <Text style={styles.replayInsightValue}>{formatCompactCount(post.views)}</Text>
                 </View>
-              ))}
+                <View style={styles.replayInsightRow}>
+                  <Text style={styles.replayInsightLabel}>Replayt</Text>
+                  <Text style={styles.replayInsightValue}>{formatCompactCount(post.replay_count)}</Text>
+                </View>
+                <View style={styles.replayInsightRow}>
+                  <Text style={styles.replayInsightLabel}>Kesto</Text>
+                  <Text style={styles.replayInsightValue}>{formatReplayDuration(post.duration)}</Text>
+                </View>
+              </View>
+            ) : null}
+          </View>
+
+          <View style={styles.detailPanel}>
+            <View style={styles.commentsHeaderRow}>
+              <Text style={styles.commentsTitle}>Comments</Text>
+              <Text style={styles.commentsCountPill}>{comments.length}</Text>
             </View>
-          ) : null}
-        </View>
-      ) : null}
-      <View style={styles.statsRow}>
-        <View style={styles.statCard}>
-          <Text style={styles.statValue}>{post.likes_count}</Text>
-          <Text style={styles.statLabel}>Likes</Text>
-        </View>
-        <View style={styles.statCard}>
-          <Text style={styles.statValue}>{post.comments_count}</Text>
-          <Text style={styles.statLabel}>Comments</Text>
+            {comments.length ? comments.map((comment) => {
+              const isHighlighted = highlightedCommentId === comment.comment_id;
+              return (
+                <View
+                  key={comment.comment_id}
+                  style={[styles.commentCard, isHighlighted && styles.commentCardHighlighted]}
+                  onLayout={(event) => {
+                    commentLayouts.current[comment.comment_id] = event.nativeEvent.layout.y;
+                  }}
+                >
+                  <Text style={styles.commentMeta}>@{comment.username} · {comment.created_at}</Text>
+                  <Text style={styles.commentBody}>{comment.text}</Text>
+                </View>
+              );
+            }) : (
+              <View style={styles.commentsEmptyCard}>
+                <Ionicons name="chatbubble-ellipses-outline" size={24} color="#94a3b8" />
+                <Text style={styles.commentsEmptyTitle}>Ei kommentteja vielä</Text>
+                <Text style={styles.commentsEmptyText}>Ensimmäiset reaktiot ilmestyvät tähän.</Text>
+              </View>
+            )}
+          </View>
         </View>
       </View>
-
-      <Text style={styles.commentsTitle}>Comments</Text>
-      {comments.map((comment) => {
-        const isHighlighted = highlightedCommentId === comment.comment_id;
-        return (
-          <View
-            key={comment.comment_id}
-            style={[styles.commentCard, isHighlighted && styles.commentCardHighlighted]}
-            onLayout={(event) => {
-              commentLayouts.current[comment.comment_id] = event.nativeEvent.layout.y;
-            }}
-          >
-            <Text style={styles.commentMeta}>@{comment.username} · {comment.created_at}</Text>
-            <Text style={styles.commentBody}>{comment.text}</Text>
-          </View>
-        );
-      })}
       </View>
       {postActionNotice ? (
         <View style={styles.postActionNotice} accessibilityRole="alert">
@@ -675,10 +717,26 @@ const styles = StyleSheet.create({
   },
   processingFrame: { width: '100%', aspectRatio: 16 / 9, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#020617' },
   processingText: { color: '#dbeafe', fontSize: 14, fontWeight: '900' },
-  body: { fontSize: 16, color: '#111827', lineHeight: 24, backgroundColor: '#fff', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#e5e7eb' },
+  detailGrid: { width: '100%', maxWidth: 1100, alignSelf: 'center', gap: 14 },
+  detailGridDesktop: { flexDirection: 'row', alignItems: 'flex-start' },
+  detailMainColumn: { flex: 1.35, minWidth: 0, gap: 14 },
+  detailSideColumn: { flex: 0.9, minWidth: 320, gap: 14 },
+  detailPanel: {
+    width: '100%',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#fff',
+    padding: 16,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+  },
+  detailPanelEyebrow: { color: '#64748b', fontSize: 11, fontWeight: '900', textTransform: 'uppercase', marginBottom: 10 },
+  body: { fontSize: 16, color: '#111827', lineHeight: 24, fontWeight: '700' },
   moderationBadge: { alignSelf: 'flex-start', marginTop: 10, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: '#fef3c7' },
   moderationBadgeText: { color: '#92400e', fontWeight: '800', fontSize: 12 },
-  musicWarningStrip: { width: '100%', maxWidth: 1100, alignSelf: 'center', flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, borderWidth: 1, borderColor: '#fde68a', borderRadius: 14, backgroundColor: '#fffbeb', paddingHorizontal: 12, paddingVertical: 10 },
+  musicWarningStrip: { width: '100%', flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 12, borderWidth: 1, borderColor: '#fde68a', borderRadius: 14, backgroundColor: '#fffbeb', paddingHorizontal: 12, paddingVertical: 10 },
   musicWarningIcon: { color: '#92400e', fontSize: 16, fontWeight: '900' },
   musicWarningText: { flex: 1, color: '#92400e', fontSize: 13, fontWeight: '800', lineHeight: 18 },
   tagSection: { marginTop: 14, gap: 8 },
@@ -688,13 +746,52 @@ const styles = StyleSheet.create({
   mentionPill: { backgroundColor: '#ECFDF5' },
   hashtagText: { color: '#0F62FE', fontWeight: '800', fontSize: 12 },
   mentionText: { color: '#0F766E', fontWeight: '800', fontSize: 12 },
-  statsRow: { flexDirection: 'row', gap: 12, marginTop: 16 },
+  statsRow: { flexDirection: 'row', gap: 10 },
   statCard: { flex: 1, backgroundColor: '#fff', borderRadius: 16, borderWidth: 1, borderColor: '#e5e7eb', padding: 14, alignItems: 'center' },
   statValue: { fontSize: 22, fontWeight: '900', color: '#007AFF' },
   statLabel: { fontSize: 12, color: '#6b7280', marginTop: 4, fontWeight: '700' },
-  commentsTitle: { marginTop: 20, marginBottom: 10, fontSize: 18, fontWeight: '800', color: '#111827' },
+  replayInsightStack: { marginTop: 12, gap: 8 },
+  replayInsightRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    paddingHorizontal: 11,
+    paddingVertical: 9,
+  },
+  replayInsightLabel: { color: '#64748b', fontSize: 12, fontWeight: '900' },
+  replayInsightValue: { color: '#0f172a', fontSize: 13, fontWeight: '900' },
+  commentsHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 },
+  commentsTitle: { fontSize: 18, fontWeight: '900', color: '#111827' },
+  commentsCountPill: {
+    minWidth: 28,
+    borderRadius: 999,
+    backgroundColor: '#eff6ff',
+    color: '#0F62FE',
+    fontSize: 12,
+    fontWeight: '900',
+    textAlign: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    overflow: 'hidden',
+  },
   commentCard: { backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e5e7eb', padding: 12, marginBottom: 10 },
   commentCardHighlighted: { borderColor: '#007AFF', backgroundColor: '#eef6ff' },
   commentMeta: { color: '#6b7280', fontSize: 12, marginBottom: 6, fontWeight: '700' },
   commentBody: { color: '#111827', fontSize: 14, lineHeight: 20 },
+  commentsEmptyCard: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    padding: 18,
+    gap: 6,
+  },
+  commentsEmptyTitle: { color: '#111827', fontSize: 14, fontWeight: '900', textAlign: 'center' },
+  commentsEmptyText: { color: '#64748b', fontSize: 12, fontWeight: '700', textAlign: 'center' },
 });
