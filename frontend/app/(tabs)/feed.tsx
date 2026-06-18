@@ -246,6 +246,7 @@ function FeedScreen() {
   const [breakingLive, setBreakingLive] = useState<BreakingLivePayload | null>(null);
   const [localYosla, setLocalYosla] = useState<LocalYoslaPayload | null>(null);
   const [surpriseLoading, setSurpriseLoading] = useState(false);
+  const [postActionNotice, setPostActionNotice] = useState('');
   const [adConfig, setAdConfig] = useState<AdConfig>({
     placements: { in_feed: false, sidebar: false, interstitial: false },
     frequency: 5,
@@ -262,11 +263,22 @@ function FeedScreen() {
   const activePostStartRef = useRef<Record<string, number>>({});
   const visiblePostIdsRef = useRef<Set<string>>(new Set());
   const dwellFlushTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const postActionNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendDwellEventRef = useRef<(postId: string, dwellMs: number) => Promise<void>>(async () => {});
   const flushVisibleDwellRef = useRef<() => Promise<void>>(async () => {});
   const videoMilestonesByPostRef = useRef<Record<string, Set<string>>>({});
   const isNewUser = (user?.posts_count ?? 0) < 3 && (user?.followers_count ?? 0) === 0 && (user?.following_count ?? 0) <= 2;
   const isDesktop = width >= 768;
+
+  const showPostActionNotice = useCallback((message: string) => {
+    setPostActionNotice(message);
+    if (postActionNoticeTimerRef.current) clearTimeout(postActionNoticeTimerRef.current);
+    postActionNoticeTimerRef.current = setTimeout(() => setPostActionNotice(''), 2600);
+  }, []);
+
+  useEffect(() => () => {
+    if (postActionNoticeTimerRef.current) clearTimeout(postActionNoticeTimerRef.current);
+  }, []);
 
   const resolveMediaUrl = (uri?: string) => {
     if (!uri) return undefined;
@@ -1537,6 +1549,7 @@ function FeedScreen() {
             onDelete={deletePostFromMenu}
             onHide={(post) => deletePostFromFeed(post.post_id)}
             onReport={(post, reason) => void reportPost(post.post_id, reason)}
+            onNotice={showPostActionNotice}
           />
           {item.user_id !== user?.user_id && (
             <TouchableOpacity
@@ -1717,7 +1730,13 @@ function FeedScreen() {
 
         <TouchableOpacity
           style={[styles.actionButton, isRTL && styles.actionButtonRTL]}
-          onPress={() => void shareActionPost(item)}
+          onPressIn={(event) => event.stopPropagation?.()}
+          onPress={(event) => {
+            event.stopPropagation?.();
+            void shareActionPost(item, showPostActionNotice);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Jaa julkaisu"
         >
           <Ionicons name="share-social-outline" size={21} color="#666" />
         </TouchableOpacity>
@@ -1851,6 +1870,12 @@ function FeedScreen() {
 
   return (
     <View style={styles.container}>
+      {postActionNotice ? (
+        <View style={styles.postActionNotice} accessibilityRole="alert">
+          <Ionicons name="checkmark-circle" size={16} color="#dcfce7" />
+          <Text style={styles.postActionNoticeText}>{postActionNotice}</Text>
+        </View>
+      ) : null}
       {interstitialVisible ? (
         <View style={styles.interstitialOverlay}>
           <View style={styles.interstitialCard}>
@@ -3249,6 +3274,31 @@ const styles = StyleSheet.create({
   actionTextRTL: {
     marginLeft: 0,
     marginRight: 6,
+  },
+  postActionNotice: {
+    position: Platform.OS === 'web' ? 'fixed' as any : 'absolute',
+    top: 18,
+    right: 18,
+    zIndex: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.35)',
+    backgroundColor: 'rgba(15, 23, 42, 0.94)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: '#020617',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  postActionNoticeText: {
+    color: '#f8fafc',
+    fontSize: 13,
+    fontWeight: '900',
   },
   commentsContainer: {
     marginTop: 12,

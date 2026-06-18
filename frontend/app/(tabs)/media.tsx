@@ -257,6 +257,7 @@ export default function MediaScreen() {
                       />
                       <TouchableOpacity
                         style={styles.cardActionButton}
+                        onPressIn={(event) => event.stopPropagation?.()}
                         onPress={(event) => {
                           event.stopPropagation?.();
                           void shareActionPost(post);

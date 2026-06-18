@@ -119,8 +119,12 @@ export function PostActionsButton({
   const [menuVisible, setMenuVisible] = useState(false);
   const isOwner = !!currentUserId && post.user_id === currentUserId;
 
-  const openMenu = (event?: GestureResponderEvent) => {
+  const stopPressEvent = (event?: GestureResponderEvent) => {
     event?.stopPropagation?.();
+  };
+
+  const openMenu = (event?: GestureResponderEvent) => {
+    stopPressEvent(event);
     console.log('[post-actions] menu opened', { postId: post.post_id, isOwner });
     setMenuVisible(true);
   };
@@ -149,6 +153,7 @@ export function PostActionsButton({
     <>
       <TouchableOpacity
         style={[styles.trigger, compact && styles.triggerCompact]}
+        onPressIn={stopPressEvent}
         onPress={openMenu}
         accessibilityRole="button"
         accessibilityLabel="Avaa julkaisun toimintovalikko"
