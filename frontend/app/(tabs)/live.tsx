@@ -175,7 +175,12 @@ const formatBytes = (bytes: number) => {
 };
 
 const LIVE_RECORDING_CHUNK_THRESHOLD_BYTES = 8 * 1024 * 1024;
-const LIVE_RECORDING_CHUNK_SIZE_BYTES = 2 * 1024 * 1024;
+const LIVE_RECORDING_CHUNK_SIZE_BYTES = 1024 * 1024;
+const LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES = [
+  LIVE_RECORDING_CHUNK_SIZE_BYTES,
+  512 * 1024,
+  256 * 1024,
+];
 const LIVE_RECORDING_CHUNK_MAX_RETRIES = 3;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -853,108 +858,150 @@ export default function LiveScreen() {
         console.warn('Live-tallenteen thumbnailia ei voitu kaapata:', thumbnailError);
       }
 
-      let response: Response;
+      let response: Response | null = null;
       if (shouldUseChunkedUpload) {
-        const uploadId = `live_${user.user_id}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-        const totalChunks = Math.ceil(recordingFile.size / LIVE_RECORDING_CHUNK_SIZE_BYTES);
         const chunkHeaders = buildApiHeaders(undefined, token);
-        console.info('[live-recording] chunked upload started', {
-          uploadId,
-          totalChunks,
-          chunkSize: LIVE_RECORDING_CHUNK_SIZE_BYTES,
-          fileSize: recordingFile.size,
-          fileSizeLabel: formatBytes(recordingFile.size),
-        });
-        for (let index = 0; index < totalChunks; index += 1) {
-          const start = index * LIVE_RECORDING_CHUNK_SIZE_BYTES;
-          const end = Math.min(recordingFile.size, start + LIVE_RECORDING_CHUNK_SIZE_BYTES);
-          const chunkBlob = recordingFile.slice(start, end, contentType);
-          const chunkForm = new FormData();
-          chunkForm.append('upload_id', uploadId);
-          chunkForm.append('index', String(index));
-          chunkForm.append('total_chunks', String(totalChunks));
-          chunkForm.append('chunk', chunkBlob, `${recordingFilename}.part${index}`);
-          setRecordingSaveMessage(`Lähetetään 1080p-tallennetta paloissa ${index + 1}/${totalChunks}...`);
-          console.info('[live-recording] uploading chunk', {
+        let lastChunkedUploadError: unknown = null;
+        for (let sizeAttempt = 0; sizeAttempt < LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES.length; sizeAttempt += 1) {
+          const chunkSizeBytes = LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES[sizeAttempt];
+          const uploadId = `live_${user.user_id}_${Date.now()}_${sizeAttempt}_${Math.random().toString(36).slice(2, 8)}`;
+          const totalChunks = Math.ceil(recordingFile.size / chunkSizeBytes);
+          console.info('[live-recording] chunked upload started', {
             uploadId,
-            index,
+            sizeAttempt: sizeAttempt + 1,
+            totalSizeAttempts: LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES.length,
             totalChunks,
-            chunkSize: chunkBlob.size,
-            chunkSizeLabel: formatBytes(chunkBlob.size),
+            chunkSize: chunkSizeBytes,
+            chunkSizeLabel: formatBytes(chunkSizeBytes),
+            fileSize: recordingFile.size,
+            fileSizeLabel: formatBytes(recordingFile.size),
+            selectedVideoQuality,
           });
-          let chunkResponse: Response | null = null;
-          let lastChunkError: unknown = null;
-          for (let attempt = 1; attempt <= LIVE_RECORDING_CHUNK_MAX_RETRIES; attempt += 1) {
-            try {
-              chunkResponse = await fetch(apiUrl('/live-recordings/chunks'), {
-                method: 'POST',
-                headers: chunkHeaders,
-                body: chunkForm,
-              });
-              if (chunkResponse.ok) break;
-              lastChunkError = await readUploadError(chunkResponse);
-              console.warn('[live-recording] chunk upload response failed', {
+          try {
+            for (let index = 0; index < totalChunks; index += 1) {
+              const start = index * chunkSizeBytes;
+              const end = Math.min(recordingFile.size, start + chunkSizeBytes);
+              const chunkBlob = recordingFile.slice(start, end, contentType);
+              setRecordingSaveMessage(`Lähetetään 1080p-tallennetta paloissa ${index + 1}/${totalChunks}...`);
+              console.info('[live-recording] uploading chunk', {
                 uploadId,
                 index,
                 totalChunks,
-                attempt,
-                status: chunkResponse.status,
-                error: lastChunkError,
-              });
-            } catch (chunkError) {
-              lastChunkError = chunkError;
-              console.error('[live-recording] chunk upload failed before response', {
-                uploadId,
-                index,
-                totalChunks,
-                attempt,
                 chunkSize: chunkBlob.size,
-                error: chunkError,
+                chunkSizeLabel: formatBytes(chunkBlob.size),
+                configuredChunkSize: chunkSizeBytes,
+                configuredChunkSizeLabel: formatBytes(chunkSizeBytes),
               });
+              let chunkResponse: Response | null = null;
+              let lastChunkError: unknown = null;
+              for (let attempt = 1; attempt <= LIVE_RECORDING_CHUNK_MAX_RETRIES; attempt += 1) {
+                const chunkForm = new FormData();
+                chunkForm.append('upload_id', uploadId);
+                chunkForm.append('index', String(index));
+                chunkForm.append('total_chunks', String(totalChunks));
+                chunkForm.append('chunk', chunkBlob, `${recordingFilename}.part${index}`);
+                try {
+                  chunkResponse = await fetch(apiUrl('/live-recordings/chunks'), {
+                    method: 'POST',
+                    headers: chunkHeaders,
+                    body: chunkForm,
+                  });
+                  if (chunkResponse.ok) break;
+                  lastChunkError = await readUploadError(chunkResponse);
+                  console.warn('[live-recording] chunk upload response failed', {
+                    uploadId,
+                    index,
+                    totalChunks,
+                    attempt,
+                    status: chunkResponse.status,
+                    error: lastChunkError,
+                  });
+                } catch (chunkError) {
+                  lastChunkError = chunkError;
+                  console.error('[live-recording] chunk upload failed before response', {
+                    uploadId,
+                    index,
+                    totalChunks,
+                    attempt,
+                    chunkSize: chunkBlob.size,
+                    chunkSizeLabel: formatBytes(chunkBlob.size),
+                    error: chunkError,
+                  });
+                }
+                if (attempt < LIVE_RECORDING_CHUNK_MAX_RETRIES) {
+                  setRecordingSaveMessage(`Yritetään palaa ${index + 1}/${totalChunks} uudelleen (${attempt + 1}/${LIVE_RECORDING_CHUNK_MAX_RETRIES})...`);
+                  await wait(600 * attempt);
+                }
+              }
+              if (!chunkResponse?.ok) {
+                throw new Error(
+                  lastChunkError instanceof Error
+                    ? `Chunk upload failed: ${lastChunkError.name}: ${lastChunkError.message}. chunk=${index + 1}/${totalChunks}, chunk.size=${chunkBlob.size} (${formatBytes(chunkBlob.size)}), configuredChunkSize=${formatBytes(chunkSizeBytes)}, file.size=${recordingFile.size} (${formatBytes(recordingFile.size)})`
+                    : `Chunk upload failed: ${String(lastChunkError || 'unknown error')}. chunk=${index + 1}/${totalChunks}, chunk.size=${chunkBlob.size} (${formatBytes(chunkBlob.size)}), configuredChunkSize=${formatBytes(chunkSizeBytes)}, file.size=${recordingFile.size} (${formatBytes(recordingFile.size)})`
+                );
+              }
             }
-            if (attempt < LIVE_RECORDING_CHUNK_MAX_RETRIES) {
-              setRecordingSaveMessage(`Yritetään palaa ${index + 1}/${totalChunks} uudelleen (${attempt + 1}/${LIVE_RECORDING_CHUNK_MAX_RETRIES})...`);
-              await wait(600 * attempt);
+            const completeForm = new FormData();
+            completeForm.append('upload_id', uploadId);
+            completeForm.append('total_chunks', String(totalChunks));
+            completeForm.append('filename', recordingFilename);
+            completeForm.append('content_type', contentType);
+            completeForm.append('text', `${title}\n\nLive Recording`);
+            completeForm.append('title', title);
+            completeForm.append('duration', String(Math.max(1, Math.round(duration))));
+            completeForm.append('visibility', 'public');
+            completeForm.append('topic', host.topic || 'YOSLA Live');
+            if (thumbnailBlob?.size) {
+              completeForm.append('image', thumbnailBlob, `live-recording-${host.id}-${Date.now()}.jpg`);
+              console.info('[live-recording] thumbnail appended', {
+                size: thumbnailBlob.size,
+                type: thumbnailBlob.type,
+              });
+            } else {
+              console.info('[live-recording] thumbnail skipped: empty or unavailable');
+            }
+            setRecordingSaveMessage('Viimeistellään 1080p-tallennetta...');
+            console.info('[live-recording] completing chunked upload', {
+              uploadId,
+              totalChunks,
+              chunkSize: chunkSizeBytes,
+              fileSize: recordingFile.size,
+            });
+            response = await fetch(apiUrl('/live-recordings/chunks/complete'), {
+              method: 'POST',
+              headers: chunkHeaders,
+              body: completeForm,
+            });
+            console.info('[live-recording] chunked upload complete response', {
+              uploadId,
+              status: response.status,
+              ok: response.ok,
+              chunkSize: chunkSizeBytes,
+            });
+            break;
+          } catch (chunkedError) {
+            lastChunkedUploadError = chunkedError;
+            console.error('[live-recording] chunked upload pass failed', {
+              uploadId,
+              sizeAttempt: sizeAttempt + 1,
+              chunkSize: chunkSizeBytes,
+              chunkSizeLabel: formatBytes(chunkSizeBytes),
+              error: chunkedError,
+            });
+            if (sizeAttempt < LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES.length - 1) {
+              const nextChunkSize = LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES[sizeAttempt + 1];
+              setRecordingSaveMessage(`Yhteys katkesi. Yritetään uudelleen pienemmillä paloilla (${formatBytes(nextChunkSize)})...`);
+              await wait(1000);
             }
           }
-          if (!chunkResponse?.ok) {
-            throw new Error(
-              lastChunkError instanceof Error
-                ? `Chunk upload failed: ${lastChunkError.name}: ${lastChunkError.message}. chunk=${index + 1}/${totalChunks}, chunk.size=${chunkBlob.size} (${formatBytes(chunkBlob.size)}), file.size=${recordingFile.size} (${formatBytes(recordingFile.size)})`
-                : `Chunk upload failed: ${String(lastChunkError || 'unknown error')}. chunk=${index + 1}/${totalChunks}, chunk.size=${chunkBlob.size} (${formatBytes(chunkBlob.size)}), file.size=${recordingFile.size} (${formatBytes(recordingFile.size)})`
-            );
-          }
         }
-        const completeForm = new FormData();
-        completeForm.append('upload_id', uploadId);
-        completeForm.append('total_chunks', String(totalChunks));
-        completeForm.append('filename', recordingFilename);
-        completeForm.append('content_type', contentType);
-        completeForm.append('text', `${title}\n\nLive Recording`);
-        completeForm.append('title', title);
-        completeForm.append('duration', String(Math.max(1, Math.round(duration))));
-        completeForm.append('visibility', 'public');
-        completeForm.append('topic', host.topic || 'YOSLA Live');
-        if (thumbnailBlob?.size) {
-          completeForm.append('image', thumbnailBlob, `live-recording-${host.id}-${Date.now()}.jpg`);
-          console.info('[live-recording] thumbnail appended', {
-            size: thumbnailBlob.size,
-            type: thumbnailBlob.type,
-          });
-        } else {
-          console.info('[live-recording] thumbnail skipped: empty or unavailable');
+        if (!response) {
+          throw new Error(
+            lastChunkedUploadError instanceof Error
+              ? `Chunked upload failed before server completion: ${lastChunkedUploadError.message}`
+              : `Chunked upload failed before server completion: ${String(lastChunkedUploadError || 'unknown error')}`
+          );
         }
-        setRecordingSaveMessage('Viimeistellään 1080p-tallennetta...');
-        console.info('[live-recording] completing chunked upload', {
-          uploadId,
-          totalChunks,
-          fileSize: recordingFile.size,
-        });
-        response = await fetch(apiUrl('/live-recordings/chunks/complete'), {
-          method: 'POST',
-          headers: chunkHeaders,
-          body: completeForm,
-        });
       } else {
         console.info('[live-recording] creating FormData');
         const formData = new FormData();
@@ -1039,7 +1086,10 @@ export default function LiveScreen() {
         status: response?.status,
         ok: response?.ok,
       });
-      if (!response?.ok) {
+      if (!response) {
+        throw new Error('Upload failed: no response object was created');
+      }
+      if (!response.ok) {
         const uploadError = await readUploadError(response);
         console.error('[live-recording] upload response error', {
           status: response.status,
