@@ -1,11 +1,42 @@
-import { useEffect, useState } from 'react';
-import { ActivityIndicator, Image, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { ActivityIndicator, Image, Platform, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from 'react-native';
 import { useRouter } from 'expo-router';
+import { Asset } from 'expo-asset';
 import { useAuth } from '../src/contexts/AuthContext';
 import { useI18n } from '../src/contexts/I18nContext';
 import { API_BASE } from '../src/utils/api/http';
 
 const yoslaHeroImage = require('../assets/brand/yosla-hero.png');
+
+function YoslaHeroImage({ isWide, label }: { isWide: boolean; label: string }) {
+  if (Platform.OS === 'web') {
+    const source = Asset.fromModule(yoslaHeroImage);
+    return React.createElement('img', {
+      src: source.uri,
+      alt: label,
+      style: {
+        width: '100%',
+        height: isWide ? 560 : 420,
+        objectFit: 'contain',
+        display: 'block',
+        borderRadius: isWide ? 20 : 16,
+        marginBottom: 20,
+        backgroundColor: '#020617',
+        border: '1px solid rgba(250,204,21,0.22)',
+        boxSizing: 'border-box',
+      },
+    });
+  }
+
+  return (
+    <Image
+      source={yoslaHeroImage}
+      style={[styles.heroImage, !isWide && styles.heroImageMobile]}
+      resizeMode="contain"
+      accessibilityLabel={label}
+    />
+  );
+}
 
 type HomepageConfig = {
   title: string;
@@ -104,12 +135,7 @@ export default function Index() {
           </Text>
         </View>
 
-        <Image
-          source={yoslaHeroImage}
-          style={[styles.heroImage, !isWide && styles.heroImageMobile]}
-          resizeMode="contain"
-          accessibilityLabel={homepage?.hero_image_alt || homepage?.title || 'YOSLA SOME LIFE'}
-        />
+        <YoslaHeroImage isWide={isWide} label={homepage?.hero_image_alt || homepage?.title || 'YOSLA SOME LIFE'} />
 
         <View style={styles.featureCard}>
           <View style={styles.featureHeaderRow}>
@@ -332,6 +358,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#020617',
     borderWidth: 1,
     borderColor: 'rgba(250,204,21,0.22)',
+    objectFit: 'contain' as any,
   },
   heroImageMobile: {
     height: 420,

@@ -1,15 +1,41 @@
 import { Tabs, Redirect, usePathname, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useEffect, useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import { Asset } from 'expo-asset';
 import { useAuth } from '../../src/contexts/AuthContext';
-import { View, ActivityIndicator, Image, StyleSheet, useWindowDimensions, Pressable, Text } from 'react-native';
+import { View, ActivityIndicator, Image, Platform, StyleSheet, useWindowDimensions, Pressable, Text } from 'react-native';
 import { useApiClient } from '../../src/hooks/useApiClient';
 import { useI18n } from '../../src/contexts/I18nContext';
 import { hasCompletedOnboarding, isNewUserProfile } from '../../src/utils/onboarding';
 import { canModerate, isSuperAdmin } from '../../src/utils/roles';
 
 const yoslaLogoImage = require('../../assets/brand/yosla-logo.png');
+
+function SidebarBrandLogo() {
+  if (Platform.OS === 'web') {
+    const source = Asset.fromModule(yoslaLogoImage);
+    return React.createElement('img', {
+      src: source.uri,
+      alt: 'YOSLA SOME LIFE logo',
+      style: {
+        width: '92%',
+        height: '92%',
+        objectFit: 'contain',
+        display: 'block',
+      },
+    });
+  }
+
+  return (
+    <Image
+      source={yoslaLogoImage}
+      style={styles.brandMarkImage}
+      resizeMode="contain"
+      accessibilityLabel="YOSLA SOME LIFE logo"
+    />
+  );
+}
 
 type ShellNavItem = {
   label: string;
@@ -111,12 +137,7 @@ function YoslaTabBar({
     <View style={styles.desktopSidebar}>
       <View style={styles.brandBlock}>
         <View style={styles.brandMark}>
-          <Image
-            source={yoslaLogoImage}
-            style={styles.brandMarkImage}
-            resizeMode="contain"
-            accessibilityLabel="YOSLA SOME LIFE logo"
-          />
+          <SidebarBrandLogo />
         </View>
         <View style={{ flex: 1 }}>
           <View style={styles.brandTitleRow}>
@@ -535,6 +556,7 @@ const styles = StyleSheet.create({
   brandMarkImage: {
     width: '92%',
     height: '92%',
+    objectFit: 'contain' as any,
   },
   brandTitleRow: {
     flexDirection: 'row',
