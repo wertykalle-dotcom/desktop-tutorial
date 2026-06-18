@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Modal, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { VideoView, useVideoPlayer } from 'expo-video';
 import { Ionicons } from '@expo/vector-icons';
@@ -164,6 +164,7 @@ export default function PostDetailScreen() {
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
   const [postActionNotice, setPostActionNotice] = useState('');
+  const [imageViewerOpen, setImageViewerOpen] = useState(false);
   const scrollRef = useRef<ScrollView | null>(null);
   const commentLayouts = useRef<Record<string, number>>({});
   const postActionNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -178,6 +179,15 @@ export default function PostDetailScreen() {
   useEffect(() => () => {
     if (postActionNoticeTimerRef.current) clearTimeout(postActionNoticeTimerRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!imageViewerOpen || Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setImageViewerOpen(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [imageViewerOpen]);
 
   useEffect(() => {
     let mounted = true;
@@ -414,7 +424,14 @@ export default function PostDetailScreen() {
         </View>
       ) : posterUri ? (
         <View style={[styles.mediaCard, isLiveReplay && styles.liveReplayMediaCard]}>
-          <Image source={{ uri: posterUri }} style={styles.image} resizeMode="cover" />
+          <TouchableOpacity
+            activeOpacity={0.94}
+            onPress={() => setImageViewerOpen(true)}
+            accessibilityRole="button"
+            accessibilityLabel="Avaa kuva suurempana"
+          >
+            <Image source={{ uri: posterUri }} style={styles.image} resizeMode="contain" />
+          </TouchableOpacity>
         </View>
       ) : null}
       <Text style={styles.body}>{post.text}</Text>
@@ -489,6 +506,30 @@ export default function PostDetailScreen() {
           <Text style={styles.postActionNoticeText}>{postActionNotice}</Text>
         </View>
       ) : null}
+      <Modal visible={imageViewerOpen} transparent animationType="fade" onRequestClose={() => setImageViewerOpen(false)}>
+        <View style={styles.imageViewerOverlay}>
+          <TouchableOpacity
+            style={styles.imageViewerBackdrop}
+            activeOpacity={1}
+            onPress={() => setImageViewerOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Sulje kuva"
+          />
+          <View style={styles.imageViewerFrame}>
+            <TouchableOpacity
+              style={styles.imageViewerClose}
+              onPress={() => setImageViewerOpen(false)}
+              accessibilityRole="button"
+              accessibilityLabel="Sulje"
+            >
+              <Ionicons name="close" size={24} color="#fff" />
+            </TouchableOpacity>
+            {posterUri ? (
+              <Image source={{ uri: posterUri }} style={styles.imageViewerImage} resizeMode="contain" accessibilityLabel={post.title || post.text || 'YOSLA kuva'} />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -593,7 +634,45 @@ const styles = StyleSheet.create({
     shadowRadius: 18,
   },
   video: { width: '100%', aspectRatio: 16 / 9, backgroundColor: '#020617', borderRadius: 16 },
-  image: { width: '100%', aspectRatio: 16 / 9, borderRadius: 16, backgroundColor: '#020617' },
+  image: { width: '100%', aspectRatio: 16 / 9, maxHeight: 620, borderRadius: 16, backgroundColor: '#020617' },
+  imageViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2,6,23,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  imageViewerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  imageViewerFrame: {
+    width: '100%',
+    height: '100%',
+    maxWidth: 1280,
+    maxHeight: 860,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  imageViewerImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 14,
+    backgroundColor: '#020617',
+  },
+  imageViewerClose: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    zIndex: 2,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(15,23,42,0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   processingFrame: { width: '100%', aspectRatio: 16 / 9, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 10, backgroundColor: '#020617' },
   processingText: { color: '#dbeafe', fontSize: 14, fontWeight: '900' },
   body: { fontSize: 16, color: '#111827', lineHeight: 24, backgroundColor: '#fff', borderRadius: 16, padding: 16, borderWidth: 1, borderColor: '#e5e7eb' },
