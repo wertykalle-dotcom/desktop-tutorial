@@ -1339,11 +1339,23 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
                 </View>
               ) : (
                 <View style={styles.recordingsEmptyCard}>
-                  <Ionicons name="film-outline" size={28} color="#64748b" />
+                  <View style={styles.recordingsEmptyIcon}>
+                    <Ionicons name="film-outline" size={28} color="#fff" />
+                  </View>
                   <Text style={styles.recordingsEmptyTitle}>Ei live-tallenteita vielä</Text>
                   <Text style={styles.recordingsEmptyText}>
                     Kun julkaiset live-replayn, se ilmestyy tähän muokattavaksi ja jaettavaksi.
                   </Text>
+                  <View style={[styles.recordingsEmptyActions, isRTL && styles.rowReverseWrap]}>
+                    <TouchableOpacity style={styles.recordingsEmptyPrimary} onPress={openLivePrompt}>
+                      <Ionicons name="radio" size={16} color="#fff" />
+                      <Text style={styles.recordingsEmptyPrimaryText}>Aloita live</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.recordingsEmptySecondary} onPress={() => router.push('/media')}>
+                      <Ionicons name="images-outline" size={16} color="#38bdf8" />
+                      <Text style={styles.recordingsEmptySecondaryText}>Avaa Mediavirta</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
             </View>
@@ -2733,23 +2745,79 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#243244',
+    borderColor: 'rgba(96,165,250,0.26)',
     backgroundColor: '#0f172a',
-    padding: 18,
+    padding: 22,
+    gap: 8,
+    shadowColor: '#38bdf8',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+  },
+  recordingsEmptyIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0F62FE',
+    shadowColor: '#38bdf8',
+    shadowOpacity: 0.24,
+    shadowRadius: 14,
   },
   recordingsEmptyTitle: {
-    marginTop: 8,
     color: '#f8fafc',
-    fontSize: 15,
+    fontSize: 17,
     fontWeight: '900',
+    textAlign: 'center',
   },
   recordingsEmptyText: {
-    marginTop: 4,
     color: '#94a3b8',
-    fontSize: 12,
+    fontSize: 13,
     fontWeight: '700',
     textAlign: 'center',
     lineHeight: 18,
+    maxWidth: 520,
+  },
+  recordingsEmptyActions: {
+    marginTop: 6,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 9,
+  },
+  recordingsEmptyPrimary: {
+    minWidth: 138,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 12,
+    backgroundColor: '#dc2626',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  recordingsEmptyPrimaryText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  recordingsEmptySecondary: {
+    minWidth: 158,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: 'rgba(56,189,248,0.32)',
+    backgroundColor: 'rgba(14,165,233,0.12)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  recordingsEmptySecondaryText: {
+    color: '#bae6fd',
+    fontSize: 13,
+    fontWeight: '900',
   },
   creatorGrowthCard: {
     width: '100%',
