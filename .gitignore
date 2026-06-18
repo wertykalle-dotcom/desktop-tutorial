@@ -67,9 +67,14 @@ chainlit.md
 # Data and databases
 agenthub/agents/youtube/db
 backend/uploads/
+backend/test.db
 backend/yosla.db
 backend/*.sqlite
 backend/*.sqlite3
+
+# Brand source drops copied into canonical assets
+frontend/assets/brand/ChatGPT Image*.png
+frontend/assets/brand/Nimetön malli*.png
 
 # Archive files and large assets
 **/*.zip

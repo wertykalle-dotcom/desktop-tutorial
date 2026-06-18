@@ -1,7 +1,7 @@
 # YOSLA brand assets
 
-Place the final YOSLA brand images here:
+Canonical YOSLA brand images:
 
-- `yosla-hero.jpg` - wide poster/hero image for the public front page.
-- `yosla-logo.jpg` - tighter logo crop for the desktop sidebar and app brand mark.
-
+- `yosla-hero.png` - wide desktop landing hero poster.
+- `yosla-hero-mobile.png` - portrait mobile landing hero poster.
+- `yosla-logo.png` - tighter logo crop for the desktop sidebar and app brand mark.
