@@ -542,7 +542,9 @@ const styles = StyleSheet.create({
   screenLayoutRTL: { writingDirection: 'rtl' as any },
   desktopSidebar: {
     width: 280,
-    flex: 1,
+    flexGrow: 0,
+    flexShrink: 0,
+    height: '100%',
     backgroundColor: '#FFFFFF',
     borderRightWidth: 1,
     borderRightColor: '#E5EAF2',

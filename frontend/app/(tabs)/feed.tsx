@@ -11,6 +11,7 @@ import {
   Alert,
   TextInput,
   Platform,
+  Modal,
   Animated,
   useWindowDimensions,
   ScrollView,
@@ -247,6 +248,7 @@ function FeedScreen() {
   const [localYosla, setLocalYosla] = useState<LocalYoslaPayload | null>(null);
   const [surpriseLoading, setSurpriseLoading] = useState(false);
   const [postActionNotice, setPostActionNotice] = useState('');
+  const [mediaViewer, setMediaViewer] = useState<{ uri: string; alt: string } | null>(null);
   const [adConfig, setAdConfig] = useState<AdConfig>({
     placements: { in_feed: false, sidebar: false, interstitial: false },
     frequency: 5,
@@ -268,7 +270,7 @@ function FeedScreen() {
   const flushVisibleDwellRef = useRef<() => Promise<void>>(async () => {});
   const videoMilestonesByPostRef = useRef<Record<string, Set<string>>>({});
   const isNewUser = (user?.posts_count ?? 0) < 3 && (user?.followers_count ?? 0) === 0 && (user?.following_count ?? 0) <= 2;
-  const isDesktop = width >= 768;
+  const isDesktop = width >= 1180;
 
   const showPostActionNotice = useCallback((message: string) => {
     setPostActionNotice(message);
@@ -279,6 +281,15 @@ function FeedScreen() {
   useEffect(() => () => {
     if (postActionNoticeTimerRef.current) clearTimeout(postActionNoticeTimerRef.current);
   }, []);
+
+  useEffect(() => {
+    if (!mediaViewer || Platform.OS !== 'web' || typeof window === 'undefined') return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMediaViewer(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [mediaViewer]);
 
   const resolveMediaUrl = (uri?: string) => {
     if (!uri) return undefined;
@@ -1532,6 +1543,7 @@ function FeedScreen() {
     <Animated.View
       style={[
         styles.postCard,
+        isDesktop && styles.postCardDesktop,
         isHighlighted && styles.highlightedPostCard,
         isHighlighted && {
           shadowColor: '#007AFF',
@@ -1697,7 +1709,7 @@ function FeedScreen() {
                 width: 'auto',
                 maxWidth: '100%',
                 height: 'auto',
-                maxHeight: 400,
+                maxHeight: 500,
                 display: 'block',
                 objectFit: 'contain',
                 backgroundColor: 'transparent',
@@ -1709,7 +1721,16 @@ function FeedScreen() {
           )}
         </View>
       ) : item.image ? (
-        <View style={styles.postImageWrap}>
+        <TouchableOpacity
+          style={styles.postImageWrap}
+          activeOpacity={0.92}
+          onPress={() => setMediaViewer({
+            uri: resolveMediaUrl(item.image) || item.image || '',
+            alt: item.title || item.text || 'YOSLA kuva',
+          })}
+          accessibilityRole="button"
+          accessibilityLabel="Avaa kuva suurempana"
+        >
           <Image
             source={{ uri: resolveMediaUrl(item.image) }}
             style={[
@@ -1733,7 +1754,7 @@ function FeedScreen() {
             }}
             resizeMode="contain"
           />
-        </View>
+        </TouchableOpacity>
       ) : null}
 
       <View style={[styles.postActions, isRTL && styles.rowReverse]}>
@@ -1932,6 +1953,40 @@ function FeedScreen() {
           <Text style={styles.postActionNoticeText}>{postActionNotice}</Text>
         </View>
       ) : null}
+      <Modal
+        visible={!!mediaViewer}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMediaViewer(null)}
+      >
+        <View style={styles.mediaViewerOverlay}>
+          <TouchableOpacity
+            style={styles.mediaViewerBackdrop}
+            activeOpacity={1}
+            onPress={() => setMediaViewer(null)}
+            accessibilityRole="button"
+            accessibilityLabel="Sulje kuva"
+          />
+          <View style={styles.mediaViewerFrame}>
+            <TouchableOpacity
+              style={styles.mediaViewerClose}
+              onPress={() => setMediaViewer(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Sulje"
+            >
+              <Ionicons name="close" size={24} color="#fff" />
+            </TouchableOpacity>
+            {mediaViewer?.uri ? (
+              <Image
+                source={{ uri: mediaViewer.uri }}
+                style={styles.mediaViewerImage}
+                resizeMode="contain"
+                accessibilityLabel={mediaViewer.alt}
+              />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
       {interstitialVisible ? (
         <View style={styles.interstitialOverlay}>
           <View style={styles.interstitialCard}>
@@ -2037,13 +2092,16 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   rightRail: {
-    width: 300,
+    width: 320,
     flexShrink: 0,
   },
   centerFeed: {
     flex: 1,
-    minWidth: 0,
-    maxWidth: 700,
+    flexBasis: 820,
+    flexGrow: 1,
+    flexShrink: 1,
+    minWidth: 650,
+    maxWidth: 850,
   },
   railContent: {
     gap: 12,
@@ -3053,14 +3111,56 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     backgroundColor: '#fff7ed',
   },
+  mediaViewerOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(2,6,23,0.92)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 24,
+  },
+  mediaViewerBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mediaViewerFrame: {
+    width: '100%',
+    height: '100%',
+    maxWidth: 1280,
+    maxHeight: 860,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mediaViewerImage: {
+    width: '100%',
+    height: '100%',
+    borderRadius: 14,
+    backgroundColor: '#020617',
+  },
+  mediaViewerClose: {
+    position: 'absolute',
+    top: 12,
+    right: 12,
+    zIndex: 2,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: 'rgba(15,23,42,0.82)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.22)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   postCard: {
     backgroundColor: '#fff',
     marginHorizontal: 12,
-    marginBottom: 10,
+    marginBottom: 12,
     padding: 16,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: '#ffe4c7',
+  },
+  postCardDesktop: {
+    marginHorizontal: 0,
+    padding: 18,
   },
   adCard: {
     backgroundColor: '#FFF7E6',
@@ -3331,19 +3431,21 @@ const styles = StyleSheet.create({
   postImageWrap: {
     width: '100%',
     maxWidth: '100%',
-    borderRadius: 8,
+    borderRadius: 12,
     overflow: 'hidden',
     marginTop: 4,
     marginBottom: 16,
     backgroundColor: '#f8fafc',
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   postVideoWrap: {
     width: '100%',
     maxWidth: '100%',
-    maxHeight: 400,
-    borderRadius: 8,
+    maxHeight: 500,
+    borderRadius: 12,
     overflow: 'hidden',
     marginTop: 4,
     marginBottom: 16,
@@ -3351,22 +3453,24 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
   postImage: {
     width: '100%',
     maxWidth: '100%',
-    maxHeight: 400,
+    maxHeight: 500,
     backgroundColor: '#f2f2f2',
     objectFit: 'contain' as any,
   },
   postImageFallback: {
-    height: Platform.OS === 'web' ? 320 : 300,
+    height: Platform.OS === 'web' ? 420 : 300,
   },
   nativePostVideo: {
     width: '100%',
     maxWidth: '100%',
-    height: 320,
-    maxHeight: 400,
+    height: 420,
+    maxHeight: 500,
     backgroundColor: '#111827',
   },
   postActions: {
