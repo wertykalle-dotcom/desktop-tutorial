@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Platform, RefreshControl, ScrollView, StyleSheet, Text, TouchableOpacity, View, useWindowDimensions } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { VideoView, useVideoPlayer } from 'expo-video';
@@ -91,6 +91,18 @@ export default function MediaScreen() {
   const [posts, setPosts] = useState<Post[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [postActionNotice, setPostActionNotice] = useState('');
+  const postActionNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const showPostActionNotice = useCallback((message: string) => {
+    setPostActionNotice(message);
+    if (postActionNoticeTimerRef.current) clearTimeout(postActionNoticeTimerRef.current);
+    postActionNoticeTimerRef.current = setTimeout(() => setPostActionNotice(''), 2600);
+  }, []);
+
+  useEffect(() => () => {
+    if (postActionNoticeTimerRef.current) clearTimeout(postActionNoticeTimerRef.current);
+  }, []);
 
   const loadMedia = useCallback(async () => {
     try {
@@ -254,13 +266,14 @@ export default function MediaScreen() {
                         onDelete={deletePost}
                         onHide={(target) => hidePost(target.post_id)}
                         onReport={(target, reason) => void reportPost(target, reason)}
+                        onNotice={showPostActionNotice}
                       />
                       <TouchableOpacity
                         style={styles.cardActionButton}
                         onPressIn={(event) => event.stopPropagation?.()}
                         onPress={(event) => {
                           event.stopPropagation?.();
-                          void shareActionPost(post);
+                          void shareActionPost(post, showPostActionNotice);
                         }}
                         accessibilityRole="button"
                         accessibilityLabel="Jaa julkaisu"
@@ -370,6 +383,12 @@ export default function MediaScreen() {
           <Text style={styles.emptyBody}>Kun käyttäjät lisäävät kuvia tai videoita, ne näkyvät täällä.</Text>
         </View>
       ) : null}
+      {postActionNotice ? (
+        <View style={styles.postActionNotice} accessibilityRole="alert">
+          <Ionicons name="checkmark-circle" size={16} color="#dcfce7" />
+          <Text style={styles.postActionNoticeText}>{postActionNotice}</Text>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
@@ -412,6 +431,27 @@ const styles = StyleSheet.create({
   processingText: { color: '#dbeafe', fontSize: 12, fontWeight: '900' },
   cardActions: { position: 'absolute', right: 8, top: 8, zIndex: 10, flexDirection: 'row', gap: 6 },
   cardActionButton: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
+  postActionNotice: {
+    position: Platform.OS === 'web' ? 'fixed' as any : 'absolute',
+    top: 18,
+    right: 18,
+    zIndex: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.35)',
+    backgroundColor: 'rgba(15,23,42,0.94)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: '#020617',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  postActionNoticeText: { color: '#f8fafc', fontSize: 13, fontWeight: '900' },
   heatBadge: { position: 'absolute', left: 8, top: 8, borderRadius: 999, backgroundColor: 'rgba(17,24,39,0.82)', paddingHorizontal: 8, paddingVertical: 5 },
   heatBadgeText: { color: '#fff', fontSize: 10, fontWeight: '900' },
   videoBadge: { position: 'absolute', left: 8, bottom: 8, flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 999, backgroundColor: 'rgba(15,23,42,0.86)', paddingHorizontal: 8, paddingVertical: 5 },

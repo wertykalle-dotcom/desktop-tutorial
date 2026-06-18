@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Alert, Image, Platform, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { VideoView, useVideoPlayer } from 'expo-video';
@@ -163,9 +163,21 @@ export default function PostDetailScreen() {
   const [post, setPost] = useState<Post | null>(null);
   const [comments, setComments] = useState<Comment[]>([]);
   const [loading, setLoading] = useState(true);
+  const [postActionNotice, setPostActionNotice] = useState('');
   const scrollRef = useRef<ScrollView | null>(null);
   const commentLayouts = useRef<Record<string, number>>({});
+  const postActionNoticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const highlightedCommentId = typeof commentId === 'string' ? commentId : null;
+
+  const showPostActionNotice = useCallback((message: string) => {
+    setPostActionNotice(message);
+    if (postActionNoticeTimerRef.current) clearTimeout(postActionNoticeTimerRef.current);
+    postActionNoticeTimerRef.current = setTimeout(() => setPostActionNotice(''), 2600);
+  }, []);
+
+  useEffect(() => () => {
+    if (postActionNoticeTimerRef.current) clearTimeout(postActionNoticeTimerRef.current);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -328,10 +340,15 @@ export default function PostDetailScreen() {
             onDelete={deletePost}
             onHide={() => router.back()}
             onReport={(target, reason) => void reportPost(target, reason)}
+            onNotice={showPostActionNotice}
           />
           <TouchableOpacity
             style={styles.shareButton}
-            onPress={() => void shareActionPost(post)}
+            onPressIn={(event) => event.stopPropagation?.()}
+            onPress={(event) => {
+              event.stopPropagation?.();
+              void shareActionPost(post, showPostActionNotice);
+            }}
             accessibilityRole="button"
             accessibilityLabel="Jaa julkaisu"
           >
@@ -466,6 +483,12 @@ export default function PostDetailScreen() {
         );
       })}
       </View>
+      {postActionNotice ? (
+        <View style={styles.postActionNotice} accessibilityRole="alert">
+          <Ionicons name="checkmark-circle" size={16} color="#dcfce7" />
+          <Text style={styles.postActionNoticeText}>{postActionNotice}</Text>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
@@ -478,6 +501,27 @@ const styles = StyleSheet.create({
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   shareButton: { width: 38, height: 38, borderRadius: 19, alignItems: 'center', justifyContent: 'center', backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0' },
   shareButtonIcon: { color: '#64748b', fontSize: 18, fontWeight: '900' },
+  postActionNotice: {
+    position: Platform.OS === 'web' ? 'fixed' as any : 'absolute',
+    top: 18,
+    right: 18,
+    zIndex: 50,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(34,197,94,0.35)',
+    backgroundColor: 'rgba(15,23,42,0.94)',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    shadowColor: '#020617',
+    shadowOpacity: 0.2,
+    shadowOffset: { width: 0, height: 12 },
+    shadowRadius: 24,
+    elevation: 8,
+  },
+  postActionNoticeText: { color: '#f8fafc', fontSize: 13, fontWeight: '900' },
   title: { fontSize: 28, fontWeight: '800', color: '#111827', marginBottom: 8 },
   meta: { color: '#6b7280', marginBottom: 16 },
   liveReplayHero: {

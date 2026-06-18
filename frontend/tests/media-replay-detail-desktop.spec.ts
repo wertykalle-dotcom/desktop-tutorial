@@ -54,6 +54,7 @@ test('desktop media live replay opens a playable post detail', async ({ page }, 
 
   const badResponses: { status: number; url: string }[] = [];
   const consoleErrors: string[] = [];
+  const actionLogs: string[] = [];
 
   page.on('response', (response) => {
     if (response.status() >= 400) {
@@ -67,6 +68,7 @@ test('desktop media live replay opens a playable post detail', async ({ page }, 
       text.includes('Live signaling socket error:') ||
       text.includes('[video-playback] error {label: media-card, postId: post_media_replay');
 
+    if (text.includes('[post-actions]')) actionLogs.push(text);
     if (message.type() === 'error' && !expectedMockNoise) {
       consoleErrors.push(text);
     }
@@ -93,12 +95,32 @@ test('desktop media live replay opens a playable post detail', async ({ page }, 
     return json({});
   });
 
-  await page.addInitScript(() => localStorage.setItem('auth_token', 'pc-media-token'));
+  await page.addInitScript(() => {
+    localStorage.setItem('auth_token', 'pc-media-token');
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: {
+        writeText: async (text: string) => {
+          (window as typeof window & { __copiedPostUrl?: string }).__copiedPostUrl = text;
+        },
+      },
+    });
+    Object.defineProperty(navigator, 'share', {
+      configurable: true,
+      value: undefined,
+    });
+  });
   await page.goto('/media', { waitUntil: 'networkidle' });
 
   await expect(page.locator('body')).toContainText('Mediavirta');
   await expect(page.locator('body')).toContainText('LIVE REPLAY');
   await expect(page.locator('body')).toContainText('Tallenne: #MediaSmoke');
+
+  await page.getByLabel('Jaa julkaisu').first().click();
+  await expect(page).toHaveURL(/\/media/);
+  await expect.poll(async () => page.evaluate(() => (window as typeof window & { __copiedPostUrl?: string }).__copiedPostUrl)).toContain('/posts/post_media_replay');
+  await expect(page.getByText('Linkki kopioitu')).toBeVisible();
+  await expect.poll(() => Promise.resolve(actionLogs.some((line) => line.includes('share clicked')))).toBe(true);
 
   const overflowMedia = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
   expect(overflowMedia).toBe(false);
@@ -108,6 +130,17 @@ test('desktop media live replay opens a playable post detail', async ({ page }, 
   await expect(page.locator('body')).toContainText('3 min live');
   await expect(page.locator('body')).toContainText('124 Views');
   await expect(page.locator('video')).toHaveAttribute('src', 'https://example.com/replay.webm');
+
+  await page.getByLabel('Avaa julkaisun toimintovalikko').first().click();
+  await expect(page.getByText('Edit post')).toBeVisible();
+  await expect(page.getByText('Copy link')).toBeVisible();
+  await page.getByText('Copy link').click();
+  await expect(page.getByText('Linkki kopioitu')).toBeVisible();
+
+  await page.getByLabel('Jaa julkaisu').first().click();
+  await expect(page.getByText('Linkki kopioitu')).toBeVisible();
+  await expect.poll(() => Promise.resolve(actionLogs.some((line) => line.includes('menu opened')))).toBe(true);
+  await expect.poll(() => Promise.resolve(actionLogs.some((line) => line.includes('copied link')))).toBe(true);
 
   const overflowDetail = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
   expect(overflowDetail).toBe(false);
