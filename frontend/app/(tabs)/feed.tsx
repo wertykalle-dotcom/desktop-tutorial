@@ -1097,6 +1097,23 @@ function FeedScreen() {
     });
   };
 
+  const openCreateComposer = (mode: 'text' | 'image' | 'video' = 'text') => {
+    router.push({
+      pathname: '/create',
+      params: { mode },
+    });
+  };
+
+  const openLiveComposer = () => {
+    router.push({
+      pathname: '/live',
+      params: {
+        roomId: user?.user_id ? `user_${user.user_id}` : 'yosla-live',
+        topic: '#YOSLA',
+      },
+    });
+  };
+
   const openTrendingTopic = (title: string) => {
     router.push({
       pathname: '/search',
@@ -1129,6 +1146,45 @@ function FeedScreen() {
     setJoinedCommunityTags((current) => ({ ...current, [tag]: true }));
     Alert.alert('Yhteisö', `Liityit yhteisöön ${tag}`);
   };
+
+  const renderCreateComposer = () => (
+    <View style={styles.createComposerCard}>
+      <View style={[styles.createComposerHeader, isRTL && styles.rowReverse]}>
+        <View style={styles.createComposerAvatar}>
+          <Ionicons name="person" size={20} color="#fff" />
+        </View>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.createComposerTitle, isRTL && styles.textRight]}>Mitä haluat jakaa tänään?</Text>
+          <TouchableOpacity
+            style={styles.createComposerInput}
+            onPress={() => openCreateComposer('text')}
+            accessibilityRole="button"
+            accessibilityLabel="Kirjoita julkaisu"
+          >
+            <Text style={styles.createComposerPlaceholder}>Kirjoita julkaisu...</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+      <View style={[styles.createComposerActions, !isDesktop && styles.createComposerActionsMobile]}>
+        <TouchableOpacity style={[styles.createComposerAction, styles.createComposerTextAction]} onPress={() => openCreateComposer('text')}>
+          <Ionicons name="create-outline" size={17} color="#2563eb" />
+          <Text style={styles.createComposerActionText}>Teksti</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.createComposerAction, styles.createComposerImageAction]} onPress={() => openCreateComposer('image')}>
+          <Ionicons name="camera-outline" size={17} color="#06b6d4" />
+          <Text style={styles.createComposerActionText}>Kuva</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.createComposerAction, styles.createComposerVideoAction]} onPress={() => openCreateComposer('video')}>
+          <Ionicons name="videocam-outline" size={17} color="#8b5cf6" />
+          <Text style={styles.createComposerActionText}>Video</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={[styles.createComposerAction, styles.createComposerLiveAction]} onPress={openLiveComposer}>
+          <View style={styles.createComposerLiveDot} />
+          <Text style={[styles.createComposerActionText, styles.createComposerLiveText]}>LIVE</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
 
   const renderLiveNowSection = () => (
     <View style={styles.liveNowSection}>
@@ -1902,6 +1958,7 @@ function FeedScreen() {
             refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
             ListHeaderComponent={
               <>
+                {renderCreateComposer()}
                 {renderActiveLiveCard()}
                 {renderPhase2Discovery()}
                 {renderLiveNowSection()}
@@ -1935,6 +1992,7 @@ function FeedScreen() {
           ListHeaderComponent={
             <>
               {renderMobileTopHeader()}
+              {renderCreateComposer()}
               {renderActiveLiveCard()}
               {renderPhase2Discovery()}
               {renderLiveNowSection()}
@@ -2021,6 +2079,105 @@ const styles = StyleSheet.create({
     borderColor: '#E5EAF2',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  createComposerCard: {
+    marginHorizontal: 12,
+    marginTop: 12,
+    borderRadius: 14,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(37,99,235,0.18)',
+    padding: 14,
+    gap: 12,
+    shadowColor: '#0066FF',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 10 },
+    elevation: 3,
+  },
+  createComposerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  createComposerAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 21,
+    backgroundColor: '#0f172a',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#0066FF',
+  },
+  createComposerTitle: {
+    color: '#0f172a',
+    fontSize: 15,
+    fontWeight: '900',
+    marginBottom: 7,
+  },
+  createComposerInput: {
+    minHeight: 44,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  createComposerPlaceholder: {
+    color: '#64748b',
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  createComposerActions: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  createComposerActionsMobile: {
+    flexWrap: 'wrap',
+  },
+  createComposerAction: {
+    flex: 1,
+    minWidth: 120,
+    minHeight: 42,
+    borderRadius: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+  },
+  createComposerTextAction: {
+    backgroundColor: 'rgba(37,99,235,0.08)',
+    borderColor: 'rgba(37,99,235,0.22)',
+  },
+  createComposerImageAction: {
+    backgroundColor: 'rgba(6,182,212,0.08)',
+    borderColor: 'rgba(6,182,212,0.22)',
+  },
+  createComposerVideoAction: {
+    backgroundColor: 'rgba(139,92,246,0.08)',
+    borderColor: 'rgba(139,92,246,0.22)',
+  },
+  createComposerLiveAction: {
+    backgroundColor: '#dc2626',
+    borderColor: '#ef4444',
+  },
+  createComposerActionText: {
+    color: '#0f172a',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  createComposerLiveText: {
+    color: '#fff',
+  },
+  createComposerLiveDot: {
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: '#fff',
   },
   liveNowSection: {
     backgroundColor: '#FFFFFF',

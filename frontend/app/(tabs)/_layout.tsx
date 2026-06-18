@@ -148,6 +148,31 @@ function YoslaTabBar({
         </View>
       </View>
 
+      <View style={styles.desktopCreateDock}>
+        <Pressable
+          style={[styles.desktopCreateButton, styles.desktopPublishButton]}
+          onPress={() => navigateTo('/(tabs)/create')}
+          accessibilityRole="button"
+          accessibilityLabel="Julkaise"
+        >
+          <View style={styles.desktopCreateIconShell}>
+            <Ionicons name="add" size={20} color="#fff" />
+          </View>
+          <Text style={styles.desktopCreateButtonText}>Julkaise</Text>
+        </Pressable>
+        <Pressable
+          style={[styles.desktopCreateButton, styles.desktopLiveButton]}
+          onPress={() => navigateTo('/(tabs)/live')}
+          accessibilityRole="button"
+          accessibilityLabel="Aloita LIVE"
+        >
+          <View style={[styles.desktopCreateIconShell, styles.desktopLiveIconShell]}>
+            <Ionicons name="radio" size={18} color="#fff" />
+          </View>
+          <Text style={styles.desktopCreateButtonText}>Aloita LIVE</Text>
+        </Pressable>
+      </View>
+
       <View style={styles.desktopNavList}>
         {navItems.map((item) => {
           const active = isActive(item.route);
@@ -584,6 +609,52 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '900',
     letterSpacing: 0,
+  },
+  desktopCreateDock: {
+    gap: 8,
+    marginBottom: 14,
+  },
+  desktopCreateButton: {
+    minHeight: 48,
+    borderRadius: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    shadowOffset: { width: 0, height: 10 },
+    shadowRadius: 18,
+  },
+  desktopPublishButton: {
+    backgroundColor: '#0066FF',
+    borderColor: 'rgba(96,165,250,0.7)',
+    shadowColor: '#0066FF',
+    shadowOpacity: 0.2,
+  },
+  desktopLiveButton: {
+    backgroundColor: '#dc2626',
+    borderColor: 'rgba(248,113,113,0.72)',
+    shadowColor: '#dc2626',
+    shadowOpacity: 0.24,
+  },
+  desktopCreateIconShell: {
+    width: 30,
+    height: 30,
+    borderRadius: 9,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.24)',
+  },
+  desktopLiveIconShell: {
+    backgroundColor: 'rgba(0,0,0,0.18)',
+  },
+  desktopCreateButtonText: {
+    flex: 1,
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '900',
   },
   desktopNavList: {
     gap: 6,
