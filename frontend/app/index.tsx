@@ -107,7 +107,7 @@ export default function Index() {
         <Image
           source={yoslaHeroImage}
           style={[styles.heroImage, !isWide && styles.heroImageMobile]}
-          resizeMode="cover"
+          resizeMode="contain"
           accessibilityLabel={homepage?.hero_image_alt || homepage?.title || 'YOSLA SOME LIFE'}
         />
 
@@ -153,7 +153,7 @@ export default function Index() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#F3F8FF',
+    backgroundColor: '#07111f',
   },
   content: {
     flexGrow: 1,
@@ -176,16 +176,16 @@ const styles = StyleSheet.create({
   },
   badge: {
     alignSelf: 'flex-start',
-    backgroundColor: '#E7F1FF',
+    backgroundColor: 'rgba(250,204,21,0.12)',
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: '#BFDBFE',
+    borderColor: 'rgba(250,204,21,0.36)',
     paddingHorizontal: 13,
     paddingVertical: 7,
     marginBottom: 12,
   },
   badgeText: {
-    color: '#0066FF',
+    color: '#facc15',
     fontWeight: '900',
     fontSize: 12,
     letterSpacing: 0.2,
@@ -194,25 +194,25 @@ const styles = StyleSheet.create({
     fontSize: 36,
     lineHeight: 42,
     fontWeight: '900',
-    color: '#0A1733',
+    color: '#f8fafc',
   },
   subtitle: {
     marginTop: 12,
     fontSize: 16,
     lineHeight: 25,
-    color: '#334155',
+    color: '#cbd5e1',
     maxWidth: 760,
     fontWeight: '600',
   },
   featureCard: {
-    backgroundColor: '#fff',
+    backgroundColor: '#0f172a',
     borderWidth: 1,
-    borderColor: '#DCEBFF',
+    borderColor: 'rgba(148,163,184,0.22)',
     borderRadius: 12,
     padding: 14,
     marginBottom: 24,
-    shadowColor: '#0066FF',
-    shadowOpacity: 0.09,
+    shadowColor: '#38bdf8',
+    shadowOpacity: 0.12,
     shadowOffset: { width: 0, height: 8 },
     shadowRadius: 18,
     elevation: 3,
@@ -227,15 +227,15 @@ const styles = StyleSheet.create({
   featureTitle: {
     fontSize: 14,
     fontWeight: '900',
-    color: '#0A1733',
+    color: '#f8fafc',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
   },
   featureSignal: {
     overflow: 'hidden',
     borderRadius: 999,
-    backgroundColor: '#EFF6FF',
-    color: '#0066FF',
+    backgroundColor: 'rgba(220,38,38,0.18)',
+    color: '#fecaca',
     fontSize: 11,
     fontWeight: '900',
     paddingHorizontal: 9,
@@ -303,7 +303,9 @@ const styles = StyleSheet.create({
     backgroundColor: '#007AFF',
   },
   secondaryButton: {
-    backgroundColor: '#e2e8f0',
+    backgroundColor: 'rgba(226,232,240,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(226,232,240,0.22)',
   },
   primaryButtonText: {
     color: '#fff',
@@ -311,26 +313,28 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
   secondaryButtonText: {
-    color: '#0f172a',
+    color: '#f8fafc',
     fontSize: 16,
     fontWeight: '800',
   },
   footer: {
     marginTop: 18,
-    color: '#64748b',
+    color: '#94a3b8',
     fontSize: 13,
     lineHeight: 19,
     textAlign: 'center',
   },
   heroImage: {
     width: '100%',
-    height: 430,
+    height: 560,
     borderRadius: 20,
     marginBottom: 20,
     backgroundColor: '#020617',
+    borderWidth: 1,
+    borderColor: 'rgba(250,204,21,0.22)',
   },
   heroImageMobile: {
-    height: 300,
+    height: 420,
     borderRadius: 16,
   },
 });
