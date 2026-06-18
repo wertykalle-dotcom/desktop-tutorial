@@ -13,6 +13,7 @@ import {
   Platform,
   RefreshControl,
   Modal,
+  useWindowDimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../../src/contexts/AuthContext';
@@ -152,6 +153,8 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
   const { user, token, logout, updateUser } = useAuth();
   const { locale, setLocale, isRTL, t } = useI18n();
   const { apiFetch } = useApiClient();
+  const { width } = useWindowDimensions();
+  const isDesktopProfile = width >= 980;
   const [editing, setEditing] = useState(false);
   const [username, setUsername] = useState(user?.username || '');
   const [bio, setBio] = useState(user?.bio || '');
@@ -1465,31 +1468,56 @@ export default function ProfileScreen({ initialView = 'profile' }: { initialView
               ))}
             </View>
             {filteredSavedPosts.length ? (
-              <View style={styles.savedList}>
-                {filteredSavedPosts.map((post) => (
-                  <TouchableOpacity
-                    key={post.post_id}
-                    style={styles.savedPostCard}
-                    onPress={() => router.push(`/posts/${post.post_id}`)}
-                  >
-                    <View style={[styles.savedPostTopRow, rtlRowStyle]}>
+              <View style={[styles.savedList, isDesktopProfile && styles.savedListDesktop]}>
+                {filteredSavedPosts.map((post) => {
+                  const category = getSavedPostCategory(post);
+                  const categoryMeta = savedCollections.find((item) => item.key === category) ?? savedCollections[1];
+                  const reactionTotal = post.reaction_counts ? Object.values(post.reaction_counts).reduce((sum, value) => sum + Number(value || 0), 0) : 0;
+                  return (
+                    <TouchableOpacity
+                      key={post.post_id}
+                      style={[styles.savedPostCard, isDesktopProfile && styles.savedPostCardDesktop]}
+                      onPress={() => router.push(`/posts/${post.post_id}`)}
+                    >
+                      <View style={[styles.savedPostTopRow, rtlRowStyle]}>
+                        <View style={styles.savedPostCategoryBadge}>
+                          <Ionicons name={categoryMeta.icon} size={12} color="#93c5fd" />
+                          <Text style={styles.savedPostCategoryText}>{categoryMeta.label}</Text>
+                        </View>
+                        <Text style={styles.savedPostTime}>{formatRelativeTime(post.created_at)}</Text>
+                      </View>
                       <Text style={styles.savedPostAuthor}>@{post.username}</Text>
-                      <Text style={styles.savedPostTime}>{formatRelativeTime(post.created_at)}</Text>
-                    </View>
-                    <Text style={[styles.savedPostText, isRTL && styles.textRight]} numberOfLines={2}>
-                      {post.poll?.question || post.text || 'Tallennettu julkaisu'}
-                    </Text>
-                    <View style={[styles.savedPostMetaRow, rtlRowStyle]}>
-                      <Text style={styles.savedPostMeta}>{post.comments_count || 0} kommenttia</Text>
-                      <Text style={styles.savedPostMeta}>{post.reaction_counts ? Object.values(post.reaction_counts).reduce((sum, value) => sum + Number(value || 0), 0) : 0} reaktiota</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
+                      <Text style={[styles.savedPostText, isRTL && styles.textRight]} numberOfLines={3}>
+                        {post.poll?.question || post.text || 'Tallennettu julkaisu'}
+                      </Text>
+                      <View style={[styles.savedPostMetaRow, rtlRowStyle]}>
+                        <Text style={styles.savedPostMeta}>{post.comments_count || 0} kommenttia</Text>
+                        <Text style={styles.savedPostMeta}>{reactionTotal} reaktiota</Text>
+                      </View>
+                      <View style={styles.savedPostFooter}>
+                        <Text style={styles.savedPostOpenText}>Avaa</Text>
+                        <Ionicons name={isRTL ? 'arrow-back' : 'arrow-forward'} size={15} color="#fff" />
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             ) : (
               <View style={styles.savedEmptyCard}>
-                <Ionicons name="bookmark-outline" size={24} color="#64748b" />
+                <View style={styles.savedEmptyIcon}>
+                  <Ionicons name="bookmark-outline" size={26} color="#fff" />
+                </View>
                 <Text style={styles.savedEmptyText}>Et ole vielä tallentanut julkaisuja, keskusteluja, kyselyitä, livejä tai kampanjoita.</Text>
+                <View style={styles.savedEmptyActions}>
+                  <TouchableOpacity style={styles.savedEmptyPrimary} onPress={() => router.push('/(tabs)/feed' as never)}>
+                    <Ionicons name="newspaper-outline" size={16} color="#fff" />
+                    <Text style={styles.savedEmptyPrimaryText}>Selaa syötettä</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.savedEmptySecondary} onPress={() => router.push('/(tabs)/media' as never)}>
+                    <Ionicons name="images-outline" size={16} color="#0F62FE" />
+                    <Text style={styles.savedEmptySecondaryText}>Avaa Media</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             )}
           </View> : null}
@@ -3496,14 +3524,15 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   savedTitle: {
-    color: '#111827',
-    fontSize: 17,
+    color: '#f8fafc',
+    fontSize: 19,
     fontWeight: '900',
   },
   savedSubtitle: {
-    color: '#64748b',
+    color: '#94a3b8',
     fontSize: 12,
     marginTop: 2,
+    lineHeight: 17,
   },
   savedCollectionGrid: {
     flexDirection: 'row',
@@ -3520,14 +3549,14 @@ const styles = StyleSheet.create({
     gap: 8,
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#fff',
+    borderColor: '#243244',
+    backgroundColor: '#0f172a',
     paddingHorizontal: 10,
     paddingVertical: 9,
   },
   savedCollectionPillActive: {
-    borderColor: '#0F62FE',
-    backgroundColor: '#eff6ff',
+    borderColor: '#60a5fa',
+    backgroundColor: '#0c4a6e',
   },
   savedCollectionIcon: {
     width: 30,
@@ -3535,33 +3564,47 @@ const styles = StyleSheet.create({
     borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#eff6ff',
+    backgroundColor: 'rgba(96,165,250,0.14)',
   },
   savedCollectionTextWrap: {
     flex: 1,
     minWidth: 0,
   },
   savedCollectionLabel: {
-    color: '#111827',
+    color: '#f8fafc',
     fontSize: 12,
     fontWeight: '900',
   },
   savedCollectionDescription: {
     marginTop: 1,
-    color: '#64748b',
+    color: '#94a3b8',
     fontSize: 10,
     fontWeight: '700',
   },
   savedList: {
+    flexDirection: 'column',
     gap: 10,
   },
+  savedListDesktop: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
   savedPostCard: {
-    backgroundColor: '#fff',
+    backgroundColor: '#0f172a',
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    borderRadius: 12,
+    borderColor: '#243244',
+    borderRadius: 16,
     padding: 12,
-    gap: 6,
+    gap: 9,
+    shadowColor: '#0f62fe',
+    shadowOpacity: 0.1,
+    shadowRadius: 14,
+  },
+  savedPostCardDesktop: {
+    flexBasis: '31.8%',
+    flexGrow: 1,
+    minWidth: 260,
   },
   savedPostTopRow: {
     flexDirection: 'row',
@@ -3569,7 +3612,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   savedPostAuthor: {
-    color: '#0F62FE',
+    color: '#93c5fd',
     fontSize: 12,
     fontWeight: '900',
   },
@@ -3579,35 +3622,121 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
   savedPostText: {
-    color: '#111827',
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 19,
+    color: '#f8fafc',
+    fontSize: 15,
+    fontWeight: '800',
+    lineHeight: 20,
   },
   savedPostMetaRow: {
     flexDirection: 'row',
     gap: 10,
   },
   savedPostMeta: {
-    color: '#64748b',
+    color: '#cbd5e1',
     fontSize: 11,
     fontWeight: '800',
+  },
+  savedPostCategoryBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.24)',
+    backgroundColor: 'rgba(37,99,235,0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+  },
+  savedPostCategoryText: {
+    color: '#bfdbfe',
+    fontSize: 10,
+    fontWeight: '900',
+  },
+  savedPostFooter: {
+    marginTop: 2,
+    alignSelf: 'flex-start',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#0F62FE',
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+  },
+  savedPostOpenText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '900',
   },
   savedEmptyCard: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
-    backgroundColor: '#fff',
-    borderRadius: 12,
+    gap: 10,
+    backgroundColor: '#0f172a',
+    borderRadius: 18,
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    padding: 16,
+    borderColor: 'rgba(96,165,250,0.24)',
+    padding: 22,
+    shadowColor: '#0f62fe',
+    shadowOpacity: 0.12,
+    shadowRadius: 18,
+  },
+  savedEmptyIcon: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#0F62FE',
   },
   savedEmptyText: {
-    color: '#64748b',
+    color: '#cbd5e1',
     fontSize: 13,
     fontWeight: '700',
     textAlign: 'center',
+    lineHeight: 19,
+    maxWidth: 520,
+  },
+  savedEmptyActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
+    gap: 9,
+    marginTop: 4,
+  },
+  savedEmptyPrimary: {
+    minWidth: 140,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 12,
+    backgroundColor: '#0F62FE',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  savedEmptyPrimaryText: {
+    color: '#fff',
+    fontSize: 13,
+    fontWeight: '900',
+  },
+  savedEmptySecondary: {
+    minWidth: 130,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 7,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    backgroundColor: '#eff6ff',
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  savedEmptySecondaryText: {
+    color: '#0F62FE',
+    fontSize: 13,
+    fontWeight: '900',
   },
   actions: {
     padding: 16,
