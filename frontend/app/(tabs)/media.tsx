@@ -378,9 +378,21 @@ export default function MediaScreen() {
 
       {!posts.length ? (
         <View style={styles.empty}>
-          <Ionicons name="images-outline" size={32} color="#64748b" />
+          <View style={styles.emptyIcon}>
+            <Ionicons name="images-outline" size={30} color="#fff" />
+          </View>
           <Text style={styles.emptyTitle}>Ei mediajulkaisuja vielä</Text>
-          <Text style={styles.emptyBody}>Kun käyttäjät lisäävät kuvia tai videoita, ne näkyvät täällä.</Text>
+          <Text style={styles.emptyBody}>Kun julkaiset kuvan, videon tai live-tallenteen, se nousee tähän Mediavirtaan.</Text>
+          <View style={[styles.emptyActions, isMobile && styles.emptyActionsMobile]}>
+            <TouchableOpacity style={styles.emptyPrimaryButton} onPress={() => router.push('/create')}>
+              <Ionicons name="add-circle" size={17} color="#fff" />
+              <Text style={styles.emptyPrimaryText}>Julkaise mediaa</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.emptySecondaryButton} onPress={() => router.push('/live')}>
+              <Ionicons name="radio" size={17} color="#ef4444" />
+              <Text style={styles.emptySecondaryText}>Aloita live</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       ) : null}
       {postActionNotice ? (
@@ -546,7 +558,58 @@ const styles = StyleSheet.create({
   musicWarningPillText: { color: '#92400e', fontSize: 11, fontWeight: '900' },
   meta: { color: '#64748b', fontSize: 12, fontWeight: '700' },
   liveReplayMeta: { color: '#94a3b8' },
-  empty: { alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff', borderRadius: 14, borderWidth: 1, borderColor: '#e5e7eb', padding: 24, gap: 6 },
-  emptyTitle: { color: '#111827', fontSize: 16, fontWeight: '900' },
-  emptyBody: { color: '#64748b', textAlign: 'center' },
+  empty: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e9d5ff',
+    padding: 28,
+    gap: 10,
+    shadowColor: '#7c3aed',
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+  },
+  emptyIcon: {
+    width: 58,
+    height: 58,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2e1065',
+    shadowColor: '#7c3aed',
+    shadowOpacity: 0.24,
+    shadowRadius: 14,
+  },
+  emptyTitle: { color: '#111827', fontSize: 18, fontWeight: '900', textAlign: 'center' },
+  emptyBody: { color: '#64748b', textAlign: 'center', maxWidth: 520, lineHeight: 20 },
+  emptyActions: { flexDirection: 'row', alignItems: 'center', gap: 10, marginTop: 6 },
+  emptyActionsMobile: { width: '100%', flexDirection: 'column' },
+  emptyPrimaryButton: {
+    minWidth: 170,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 12,
+    backgroundColor: '#0F62FE',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  emptyPrimaryText: { color: '#fff', fontSize: 14, fontWeight: '900' },
+  emptySecondaryButton: {
+    minWidth: 150,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    backgroundColor: '#fff1f2',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  emptySecondaryText: { color: '#991b1b', fontSize: 14, fontWeight: '900' },
 });
