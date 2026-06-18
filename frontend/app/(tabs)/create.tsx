@@ -11,6 +11,7 @@ import {
   Platform,
   Alert,
   ActivityIndicator,
+  useWindowDimensions,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -52,6 +53,11 @@ export default function CreatePostScreen() {
   const { token } = useAuth();
   const { t, isRTL } = useI18n();
   const router = useRouter();
+  const { width } = useWindowDimensions();
+  const isDesktopCreate = width >= 980;
+  const hasMedia = Boolean(image || video);
+  const hasReadyText = Boolean(text.trim());
+  const hasValidPoll = pollEnabled && Boolean(pollQuestion.trim()) && pollOptions.map((option) => option.trim()).filter(Boolean).length >= 2;
 
   const resetMedia = () => {
     setImage(null);
@@ -342,155 +348,194 @@ export default function CreatePostScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
     >
       <ScrollView style={styles.scrollView} keyboardShouldPersistTaps="handled">
-        <View style={styles.content}>
-          <Text style={styles.label}>{t('createTitle')}</Text>
-          
-          <TextInput
-            style={styles.textInput}
-            placeholder={t('createPlaceholder')}
-            value={text}
-            onChangeText={setText}
-            multiline
-            maxLength={500}
-            textAlignVertical="top"
-          />
-
-          <TouchableOpacity
-            style={[styles.pollToggle, pollEnabled && styles.pollToggleActive, isRTL && styles.rowReverse]}
-            onPress={() => setPollEnabled((current) => !current)}
-          >
-            <Ionicons name="stats-chart-outline" size={22} color={pollEnabled ? '#fff' : '#0F62FE'} />
-            <Text style={[styles.pollToggleText, pollEnabled && styles.pollToggleTextActive]}>
-              Lisää gallup / äänestys
-            </Text>
-          </TouchableOpacity>
-
-          {pollEnabled ? (
-            <View style={styles.pollBuilder}>
-              <Text style={styles.pollBuilderTitle}>Gallup</Text>
-              <TextInput
-                style={styles.pollQuestionInput}
-                placeholder="Mitä haluat kysyä?"
-                value={pollQuestion}
-                onChangeText={setPollQuestion}
-              />
-              {pollOptions.map((option, index) => (
-                <TextInput
-                  key={`poll-option-${index}`}
-                  style={styles.pollOptionInput}
-                  placeholder={`Vaihtoehto ${index + 1}`}
-                  value={option}
-                  onChangeText={(value) =>
-                    setPollOptions((current) => current.map((item, itemIndex) => itemIndex === index ? value : item))
-                  }
-                />
-              ))}
-              {pollOptions.length < 4 ? (
-                <TouchableOpacity
-                  style={styles.addPollOptionButton}
-                  onPress={() => setPollOptions((current) => [...current, ''])}
-                >
-                  <Ionicons name="add" size={18} color="#0F62FE" />
-                  <Text style={styles.addPollOptionText}>Lisää vaihtoehto</Text>
-                </TouchableOpacity>
-              ) : null}
-            </View>
-          ) : null}
-
-          {Platform.OS === 'web' ? (
-            <View
-              style={[styles.dropZone, dragActive && styles.dropZoneActive]}
-              // @ts-ignore - react-native-web passes DOM drag events through.
-              onDragOver={(event) => {
-                event.preventDefault();
-                setDragActive(true);
-              }}
-              // @ts-ignore - react-native-web passes DOM drag events through.
-              onDragLeave={(event) => {
-                event.preventDefault();
-                setDragActive(false);
-              }}
-              // @ts-ignore - react-native-web passes DOM drop events through.
-              onDrop={(event) => {
-                event.preventDefault();
-                setDragActive(false);
-                handleDroppedFiles(event.dataTransfer?.files);
-              }}
-            >
-              <Ionicons name="cloud-upload-outline" size={28} color={dragActive ? '#007AFF' : '#64748b'} />
-              <Text style={styles.dropZoneTitle}>{t('createDropMediaTitle')}</Text>
-              <Text style={styles.dropZoneText}>{t('createDropMediaBody')}</Text>
-            </View>
-          ) : null}
-
-          {image && (
-            <View style={styles.imageContainer}>
-              <Image source={{ uri: image }} style={styles.selectedImage} resizeMode="contain" />
-              <TouchableOpacity
-                style={styles.removeImageButton}
-                onPress={resetMedia}
-              >
-                <Ionicons name="close-circle" size={32} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {video && !image && (
-            <View style={styles.videoContainer}>
-              <View style={styles.videoPreview}>
-                <Ionicons name="videocam" size={26} color="#fff" />
-              </View>
-              <View style={styles.videoCopy}>
-                <Text style={styles.videoTitle}>{t('createVideoSelected')}</Text>
-                <Text style={styles.videoSub}>{selectedFileName || video}</Text>
-              </View>
-              <TouchableOpacity
-                style={styles.removeImageButton}
-                onPress={resetMedia}
-              >
-                <Ionicons name="close-circle" size={32} color="#fff" />
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {selectedFileName ? (
-            <Text style={styles.selectedFileName}>{selectedFileName}</Text>
-          ) : null}
-
-          <View style={styles.actions}>
-            <TouchableOpacity
-              style={[styles.imageButton, isRTL && styles.rowReverse]}
-              onPress={showImageOptions}
-            >
-              <Ionicons name="image-outline" size={24} color="#007AFF" />
-              <Text style={[styles.imageButtonText, isRTL && styles.imageButtonTextRTL]}>{t('createAddImage')}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.imageButton, isRTL && styles.rowReverse]}
-              onPress={async () => pickMedia('video')}
-            >
-              <Ionicons name="videocam-outline" size={24} color="#7c3aed" />
-              <Text style={[styles.imageButtonText, styles.videoButtonText, isRTL && styles.imageButtonTextRTL]}>{t('createAddVideo')}</Text>
-            </TouchableOpacity>
+        <View style={[styles.content, isDesktopCreate && styles.contentDesktop]}>
+          <View style={styles.hero}>
+            <Text style={styles.heroKicker}>YOSLA Studio</Text>
+            <Text style={styles.heroTitle}>{t('createTitle')}</Text>
+            <Text style={styles.heroBody}>Kirjoita julkaisu, lisää kuva tai video ja tarkista esikatselu ennen julkaisua.</Text>
           </View>
 
-          <TouchableOpacity
-            style={[styles.postButton, loading && styles.postButtonDisabled]}
-            onPress={handlePost}
-            disabled={loading}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.postButtonText}>{t('createPublish')}</Text>
-            )}
-          </TouchableOpacity>
-          {loading ? (
-            <View style={styles.progressWrap}>
-              <View style={[styles.progressBar, { width: `${Math.max(uploadProgress, 8)}%` }]} />
-              <Text style={styles.progressText}>{uploadProgress > 0 ? `${uploadProgress}%` : t('loading')}</Text>
+          <View style={[styles.createGrid, !isDesktopCreate && styles.createGridMobile]}>
+            <View style={styles.composerPanel}>
+              <Text style={styles.panelTitle}>Sisältö</Text>
+              <TextInput
+                style={styles.textInput}
+                placeholder={t('createPlaceholder')}
+                placeholderTextColor="#94a3b8"
+                value={text}
+                onChangeText={setText}
+                multiline
+                maxLength={500}
+                textAlignVertical="top"
+              />
+
+              <TouchableOpacity
+                style={[styles.pollToggle, pollEnabled && styles.pollToggleActive, isRTL && styles.rowReverse]}
+                onPress={() => setPollEnabled((current) => !current)}
+              >
+                <Ionicons name="stats-chart-outline" size={22} color={pollEnabled ? '#fff' : '#60a5fa'} />
+                <Text style={[styles.pollToggleText, pollEnabled && styles.pollToggleTextActive]}>
+                  Lisää gallup / äänestys
+                </Text>
+              </TouchableOpacity>
+
+              {pollEnabled ? (
+                <View style={styles.pollBuilder}>
+                  <Text style={styles.pollBuilderTitle}>Gallup</Text>
+                  <TextInput
+                    style={styles.pollQuestionInput}
+                    placeholder="Mitä haluat kysyä?"
+                    placeholderTextColor="#94a3b8"
+                    value={pollQuestion}
+                    onChangeText={setPollQuestion}
+                  />
+                  {pollOptions.map((option, index) => (
+                    <TextInput
+                      key={`poll-option-${index}`}
+                      style={styles.pollOptionInput}
+                      placeholder={`Vaihtoehto ${index + 1}`}
+                      placeholderTextColor="#94a3b8"
+                      value={option}
+                      onChangeText={(value) =>
+                        setPollOptions((current) => current.map((item, itemIndex) => itemIndex === index ? value : item))
+                      }
+                    />
+                  ))}
+                  {pollOptions.length < 4 ? (
+                    <TouchableOpacity
+                      style={styles.addPollOptionButton}
+                      onPress={() => setPollOptions((current) => [...current, ''])}
+                    >
+                      <Ionicons name="add" size={18} color="#60a5fa" />
+                      <Text style={styles.addPollOptionText}>Lisää vaihtoehto</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
+
+              {Platform.OS === 'web' ? (
+                <View
+                  style={[styles.dropZone, dragActive && styles.dropZoneActive]}
+                  // @ts-ignore - react-native-web passes DOM drag events through.
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                    setDragActive(true);
+                  }}
+                  // @ts-ignore - react-native-web passes DOM drag events through.
+                  onDragLeave={(event) => {
+                    event.preventDefault();
+                    setDragActive(false);
+                  }}
+                  // @ts-ignore - react-native-web passes DOM drop events through.
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    setDragActive(false);
+                    handleDroppedFiles(event.dataTransfer?.files);
+                  }}
+                >
+                  <Ionicons name="cloud-upload-outline" size={28} color={dragActive ? '#60a5fa' : '#94a3b8'} />
+                  <Text style={styles.dropZoneTitle}>{t('createDropMediaTitle')}</Text>
+                  <Text style={styles.dropZoneText}>{t('createDropMediaBody')}</Text>
+                </View>
+              ) : null}
+
+              <View style={styles.actions}>
+                <TouchableOpacity
+                  style={[styles.imageButton, isRTL && styles.rowReverse]}
+                  onPress={showImageOptions}
+                >
+                  <Ionicons name="image-outline" size={22} color="#60a5fa" />
+                  <Text style={[styles.imageButtonText, isRTL && styles.imageButtonTextRTL]}>{t('createAddImage')}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.imageButton, isRTL && styles.rowReverse]}
+                  onPress={async () => pickMedia('video')}
+                >
+                  <Ionicons name="videocam-outline" size={22} color="#c4b5fd" />
+                  <Text style={[styles.imageButtonText, styles.videoButtonText, isRTL && styles.imageButtonTextRTL]}>{t('createAddVideo')}</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          ) : null}
+
+            <View style={styles.previewPanel}>
+              <View style={styles.previewHeader}>
+                <Text style={styles.previewTitle}>Esikatselu</Text>
+                <Text style={styles.previewBadge}>Preview</Text>
+              </View>
+              <View style={styles.previewCard}>
+                <View style={styles.previewAuthorRow}>
+                  <View style={styles.previewAvatar}>
+                    <Ionicons name="person" size={18} color="#fff" />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={styles.previewAuthor}>YOSLA julkaisu</Text>
+                    <Text style={styles.previewMeta}>Näkyy syötteessä ja profiilissa</Text>
+                  </View>
+                </View>
+                <Text style={[styles.previewText, !hasReadyText && styles.previewPlaceholder]} numberOfLines={4}>
+                  {hasReadyText ? text.trim() : 'Kirjoita julkaisu vasemmalle nähdäksesi esikatselun.'}
+                </Text>
+                {image ? (
+                  <View style={styles.imageContainer}>
+                    <Image source={{ uri: image }} style={styles.selectedImage} resizeMode="contain" />
+                    <TouchableOpacity style={styles.removeImageButton} onPress={resetMedia}>
+                      <Ionicons name="close-circle" size={32} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+                {video && !image ? (
+                  <View style={styles.videoContainer}>
+                    <View style={styles.videoPreview}>
+                      <Ionicons name="videocam" size={26} color="#fff" />
+                    </View>
+                    <View style={styles.videoCopy}>
+                      <Text style={styles.videoTitle}>{t('createVideoSelected')}</Text>
+                      <Text style={styles.videoSub}>{selectedFileName || video}</Text>
+                    </View>
+                    <TouchableOpacity style={styles.removeImageButton} onPress={resetMedia}>
+                      <Ionicons name="close-circle" size={32} color="#fff" />
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+                {selectedFileName ? (
+                  <Text style={styles.selectedFileName}>{selectedFileName}</Text>
+                ) : null}
+              </View>
+
+              <View style={styles.publishChecklist}>
+                <View style={styles.checkRow}>
+                  <Ionicons name={hasReadyText ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={hasReadyText ? '#22c55e' : '#64748b'} />
+                  <Text style={styles.checkText}>Teksti {text.length}/500</Text>
+                </View>
+                <View style={styles.checkRow}>
+                  <Ionicons name={hasMedia ? 'checkmark-circle' : 'ellipse-outline'} size={17} color={hasMedia ? '#22c55e' : '#64748b'} />
+                  <Text style={styles.checkText}>Kuva tai video</Text>
+                </View>
+                <View style={styles.checkRow}>
+                  <Ionicons name={hasValidPoll ? 'checkmark-circle' : pollEnabled ? 'alert-circle' : 'ellipse-outline'} size={17} color={hasValidPoll ? '#22c55e' : pollEnabled ? '#f59e0b' : '#64748b'} />
+                  <Text style={styles.checkText}>Gallup {pollEnabled ? 'käytössä' : 'ei käytössä'}</Text>
+                </View>
+              </View>
+
+              <TouchableOpacity
+                style={[styles.postButton, loading && styles.postButtonDisabled]}
+                onPress={handlePost}
+                disabled={loading}
+              >
+                {loading ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.postButtonText}>{t('createPublish')}</Text>
+                )}
+              </TouchableOpacity>
+              {loading ? (
+                <View style={styles.progressWrap}>
+                  <View style={[styles.progressBar, { width: `${Math.max(uploadProgress, 8)}%` }]} />
+                  <Text style={styles.progressText}>{uploadProgress > 0 ? `${uploadProgress}%` : t('loading')}</Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -500,14 +545,84 @@ export default function CreatePostScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: '#f1f5f9',
   },
   scrollView: {
     flex: 1,
   },
   content: {
+    width: '100%',
+    maxWidth: 1240,
+    alignSelf: 'center',
     padding: 16,
+    gap: 16,
   },
+  contentDesktop: {
+    padding: 24,
+  },
+  hero: {
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(96,165,250,0.24)',
+    backgroundColor: '#07111f',
+    padding: 18,
+    shadowColor: '#0f62fe',
+    shadowOpacity: 0.13,
+    shadowRadius: 18,
+  },
+  heroKicker: {
+    color: '#60a5fa',
+    fontSize: 12,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+    marginBottom: 6,
+  },
+  heroTitle: {
+    color: '#f8fafc',
+    fontSize: 28,
+    fontWeight: '900',
+  },
+  heroBody: {
+    marginTop: 8,
+    maxWidth: 760,
+    color: '#cbd5e1',
+    fontSize: 14,
+    lineHeight: 21,
+    fontWeight: '700',
+  },
+  createGrid: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 18,
+  },
+  createGridMobile: {
+    flexDirection: 'column',
+  },
+  composerPanel: {
+    flex: 1.45,
+    minWidth: 0,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#1e293b',
+    backgroundColor: '#07111f',
+    padding: 16,
+    gap: 14,
+  },
+  previewPanel: {
+    flex: 0.95,
+    minWidth: 320,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#dbe4f0',
+    backgroundColor: '#fff',
+    padding: 16,
+    gap: 14,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.08,
+    shadowRadius: 18,
+  },
+  panelTitle: { color: '#f8fafc', fontSize: 17, fontWeight: '900' },
+  previewTitle: { color: '#0f172a', fontSize: 17, fontWeight: '900' },
   label: {
     fontSize: 18,
     fontWeight: '600',
@@ -515,13 +630,15 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   textInput: {
-    backgroundColor: '#f5f5f5',
-    borderRadius: 12,
+    backgroundColor: '#0f172a',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#243244',
     padding: 16,
     fontSize: 16,
-    minHeight: 120,
-    color: '#000',
-    marginBottom: 16,
+    minHeight: 180,
+    color: '#f8fafc',
+    lineHeight: 23,
   },
   pollToggle: {
     flexDirection: 'row',
@@ -529,17 +646,16 @@ const styles = StyleSheet.create({
     gap: 8,
     borderWidth: 1,
     borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
+    backgroundColor: 'rgba(37,99,235,0.14)',
     borderRadius: 12,
     padding: 12,
-    marginBottom: 12,
   },
   pollToggleActive: {
     backgroundColor: '#0F62FE',
     borderColor: '#0F62FE',
   },
   pollToggleText: {
-    color: '#0F62FE',
+    color: '#bfdbfe',
     fontSize: 15,
     fontWeight: '800',
   },
@@ -548,36 +664,35 @@ const styles = StyleSheet.create({
   },
   pollBuilder: {
     borderWidth: 1,
-    borderColor: '#dbeafe',
-    backgroundColor: '#f8fbff',
+    borderColor: '#243244',
+    backgroundColor: '#0f172a',
     borderRadius: 14,
     padding: 12,
     gap: 10,
-    marginBottom: 16,
   },
   pollBuilderTitle: {
-    color: '#111827',
+    color: '#f8fafc',
     fontSize: 15,
     fontWeight: '900',
   },
   pollQuestionInput: {
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#fff',
+    borderColor: '#334155',
+    backgroundColor: '#020617',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
-    color: '#111827',
+    color: '#f8fafc',
     fontSize: 14,
   },
   pollOptionInput: {
     borderWidth: 1,
-    borderColor: '#e5e7eb',
-    backgroundColor: '#fff',
+    borderColor: '#334155',
+    backgroundColor: '#020617',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 9,
-    color: '#111827',
+    color: '#f8fafc',
     fontSize: 14,
   },
   addPollOptionButton: {
@@ -586,12 +701,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     borderRadius: 999,
-    backgroundColor: '#eaf3ff',
+    backgroundColor: 'rgba(96,165,250,0.13)',
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
   addPollOptionText: {
-    color: '#0F62FE',
+    color: '#bfdbfe',
     fontWeight: '900',
   },
   dropZone: {
@@ -599,26 +714,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 1,
     borderStyle: 'dashed',
-    borderColor: '#cbd5e1',
+    borderColor: '#334155',
     borderRadius: 12,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#0f172a',
     padding: 18,
-    marginBottom: 16,
   },
   dropZoneActive: {
-    borderColor: '#007AFF',
-    backgroundColor: '#eff6ff',
+    borderColor: '#60a5fa',
+    backgroundColor: '#082f49',
   },
   dropZoneTitle: {
     marginTop: 8,
     fontSize: 15,
     fontWeight: '800',
-    color: '#0f172a',
+    color: '#f8fafc',
   },
   dropZoneText: {
     marginTop: 4,
     fontSize: 13,
-    color: '#64748b',
+    color: '#94a3b8',
     textAlign: 'center',
   },
   imageContainer: {
@@ -637,7 +751,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f5f3ff',
     borderRadius: 12,
     padding: 12,
-    marginBottom: 16,
+    position: 'relative',
   },
   videoPreview: {
     width: 56,
@@ -676,14 +790,20 @@ const styles = StyleSheet.create({
     borderRadius: 16,
   },
   actions: {
-    marginBottom: 24,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 10,
   },
   imageButton: {
+    flexGrow: 1,
+    minWidth: 170,
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     padding: 12,
-    backgroundColor: '#f5f5f5',
+    backgroundColor: '#0f172a',
+    borderWidth: 1,
+    borderColor: '#243244',
     borderRadius: 12,
   },
   rowReverse: {
@@ -691,16 +811,16 @@ const styles = StyleSheet.create({
   },
   imageButtonText: {
     fontSize: 16,
-    color: '#007AFF',
+    color: '#bfdbfe',
     marginLeft: 8,
-    fontWeight: '500',
+    fontWeight: '900',
   },
   imageButtonTextRTL: {
     marginLeft: 0,
     marginRight: 8,
   },
   videoButtonText: {
-    color: '#7c3aed',
+    color: '#ddd6fe',
   },
   postButton: {
     backgroundColor: '#007AFF',
@@ -723,6 +843,53 @@ const styles = StyleSheet.create({
     marginTop: -6,
     marginBottom: 14,
   },
+  previewHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  previewBadge: {
+    overflow: 'hidden',
+    borderRadius: 999,
+    backgroundColor: '#eff6ff',
+    color: '#0F62FE',
+    fontSize: 11,
+    fontWeight: '900',
+    paddingHorizontal: 9,
+    paddingVertical: 4,
+  },
+  previewCard: {
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    padding: 14,
+    gap: 12,
+  },
+  previewAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  previewAvatar: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    backgroundColor: '#0F62FE',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  previewAuthor: { color: '#0f172a', fontSize: 14, fontWeight: '900' },
+  previewMeta: { color: '#64748b', fontSize: 12, fontWeight: '700', marginTop: 2 },
+  previewText: { color: '#0f172a', fontSize: 15, lineHeight: 21, fontWeight: '800' },
+  previewPlaceholder: { color: '#94a3b8' },
+  publishChecklist: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#f8fafc',
+    padding: 12,
+    gap: 9,
+  },
+  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  checkText: { color: '#334155', fontSize: 13, fontWeight: '800' },
   progressWrap: {
     height: 24,
     marginTop: 12,
