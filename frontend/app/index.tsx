@@ -7,16 +7,19 @@ import { useI18n } from '../src/contexts/I18nContext';
 import { API_BASE } from '../src/utils/api/http';
 
 const yoslaHeroImage = require('../assets/brand/yosla-hero.png');
+const yoslaHeroMobileImage = require('../assets/brand/yosla-hero-mobile.png');
 
 function YoslaHeroImage({ isWide, label }: { isWide: boolean; label: string }) {
+  const imageModule = isWide ? yoslaHeroImage : yoslaHeroMobileImage;
+
   if (Platform.OS === 'web') {
-    const source = Asset.fromModule(yoslaHeroImage);
+    const source = Asset.fromModule(imageModule);
     return React.createElement('img', {
       src: source.uri,
       alt: label,
       style: {
         width: '100%',
-        aspectRatio: '16 / 9',
+        aspectRatio: isWide ? '16 / 9' : '1080 / 1460',
         height: 'auto',
         objectFit: 'contain',
         display: 'block',
@@ -32,7 +35,7 @@ function YoslaHeroImage({ isWide, label }: { isWide: boolean; label: string }) {
 
   return (
     <Image
-      source={yoslaHeroImage}
+      source={imageModule}
       style={[styles.heroImage, !isWide && styles.heroImageMobile]}
       resizeMode="contain"
       accessibilityLabel={label}
@@ -368,6 +371,7 @@ const styles = StyleSheet.create({
     elevation: 7,
   },
   heroImageMobile: {
+    aspectRatio: 1080 / 1460,
     borderRadius: 16,
   },
 });
