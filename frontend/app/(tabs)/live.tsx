@@ -15,6 +15,34 @@ const liveHosts = [
 ];
 
 type LiveHost = typeof liveHosts[number];
+type LiveHubHost = LiveHost & {
+  category: string;
+  cta: string;
+  isLive?: boolean;
+  scheduleLabel?: string;
+  icon: keyof typeof Ionicons.glyphMap;
+};
+
+const liveNowHosts: LiveHubHost[] = liveHosts.map((host, index) => ({
+  ...host,
+  category: ['Keskustelu', 'Tekijät', 'Design', 'Yhteisö'][index] ?? 'Live',
+  cta: 'Liity',
+  isLive: true,
+  icon: ['chatbubbles', 'code-slash', 'color-palette', 'people'][index] as keyof typeof Ionicons.glyphMap,
+}));
+
+const upcomingLiveHosts: LiveHubHost[] = [
+  { id: 'upcoming_1', name: 'YOSLA Talk', topic: '#Musiikki', viewers: 0, category: 'Tänään 19:00', cta: 'Muistuta', scheduleLabel: 'Alkaa pian', icon: 'calendar' },
+  { id: 'upcoming_2', name: 'Kampanjaklinikka', topic: '#creator', viewers: 0, category: 'Huomenna 18:30', cta: 'Avaa', scheduleLabel: 'Ajastettu', icon: 'time' },
+  { id: 'upcoming_3', name: 'Live Q&A', topic: '#kysymykset', viewers: 0, category: 'Pe 20:00', cta: 'Muistuta', scheduleLabel: 'Tulossa', icon: 'help-circle' },
+];
+
+const communityLiveHosts: LiveHubHost[] = [
+  { id: 'community_1', name: 'Luontohetki', topic: '#luonto', viewers: 46, category: 'Yhteisölive', cta: 'Liity', isLive: true, icon: 'leaf' },
+  { id: 'community_2', name: 'Pelihuone', topic: '#pelaaminen', viewers: 91, category: 'Pelaaminen', cta: 'Liity', isLive: true, icon: 'game-controller' },
+  { id: 'community_3', name: 'Urheilukahvit', topic: '#urheilu', viewers: 33, category: 'Urheilu', cta: 'Liity', isLive: true, icon: 'football' },
+  { id: 'community_4', name: 'Musiikkikulma', topic: '#musiikki', viewers: 58, category: 'Musiikki', cta: 'Liity', isLive: true, icon: 'musical-notes' },
+];
 
 const chatSpeedInterval = 4000;
 const LIVE_REPLAY_MAX_MS = 25 * 60 * 1000;
@@ -1954,6 +1982,78 @@ export default function LiveScreen() {
     );
   }
 
+  const renderLiveHubSection = (
+    title: string,
+    subtitle: string,
+    icon: keyof typeof Ionicons.glyphMap,
+    hosts: LiveHubHost[],
+  ) => (
+    <View style={styles.liveHubSection}>
+      <View style={styles.liveHubSectionHeader}>
+        <View style={styles.liveHubTitleRow}>
+          <View style={styles.liveHubSectionIcon}>
+            <Ionicons name={icon} size={18} color="#fff" />
+          </View>
+          <Text style={styles.liveHubSectionTitle}>{title}</Text>
+        </View>
+        <Text style={styles.liveHubSectionSubtitle}>{subtitle}</Text>
+      </View>
+
+      <View style={[styles.liveHubGrid, isMobileLive && styles.liveHubGridMobile]}>
+        {hosts.map((host) => (
+          <TouchableOpacity
+            key={host.id}
+            activeOpacity={0.88}
+            style={[
+              styles.liveHubCard,
+              isMobileLive ? styles.liveHubCardMobile : styles.liveHubCardDesktop,
+              !isMobileLive && { flexBasis: width >= 1500 ? '23.5%' : '31.5%' },
+            ]}
+            onPress={() => setActiveHost(host)}
+          >
+            <View style={styles.liveHubCardTop}>
+              <View style={styles.liveHubBadgeRow}>
+                {host.isLive ? (
+                  <View style={styles.liveHubLiveBadge}>
+                    <View style={styles.liveHubLiveDot} />
+                    <Text style={styles.liveHubLiveText}>LIVE</Text>
+                  </View>
+                ) : (
+                  <View style={styles.liveHubScheduleBadge}>
+                    <Ionicons name="calendar-outline" size={12} color="#60a5fa" />
+                    <Text style={styles.liveHubScheduleText}>{host.scheduleLabel ?? 'Tulossa'}</Text>
+                  </View>
+                )}
+                <View style={styles.liveHubCategoryPill}>
+                  <Ionicons name={host.icon} size={12} color="#93c5fd" />
+                  <Text style={styles.liveHubCategoryText}>{host.category}</Text>
+                </View>
+              </View>
+            </View>
+
+            <View style={styles.liveHubAvatarRow}>
+              <View style={styles.liveHubAvatar}>
+                <Text style={styles.liveHubAvatarText}>{host.name.slice(0, 1)}</Text>
+              </View>
+              <View style={styles.liveHubInfo}>
+                <Text style={styles.liveHubName} numberOfLines={1}>{host.name}</Text>
+                <Text style={styles.liveHubTopic}>{host.topic}</Text>
+              </View>
+            </View>
+
+            <View style={styles.liveHubMetaRow}>
+              <Text style={styles.liveHubMeta}>{host.viewers ? `${host.viewers} katsojaa` : 'Ajastettu live'}</Text>
+              <View style={styles.liveHubCta}>
+                <Text style={styles.liveHubCtaText}>{host.cta}</Text>
+                <Ionicons name="arrow-forward" size={14} color="#fff" />
+              </View>
+            </View>
+          </TouchableOpacity>
+        ))}
+      </View>
+    </View>
+  );
+
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <View style={styles.hero}>
@@ -1962,32 +2062,9 @@ export default function LiveScreen() {
         <Text style={styles.body}>Seuraa käynnissä olevia livejä, avaa chat ja liity mukaan keskusteluun.</Text>
       </View>
 
-      <View style={styles.liveGrid}>
-        {liveHosts.map((host) => (
-          <TouchableOpacity key={host.id} style={styles.liveCard} onPress={() => setActiveHost(host)}>
-            <View style={styles.liveAvatarRing}>
-              <Text style={styles.liveAvatarInitial}>{host.name.slice(0, 1)}</Text>
-              <View style={styles.liveBadge}>
-                <Text style={styles.liveBadgeText}>LIVE</Text>
-              </View>
-            </View>
-            <View style={styles.liveInfo}>
-              <Text style={styles.liveName}>{host.name}</Text>
-              <Text style={styles.liveTopic}>{host.topic}</Text>
-              <Text style={styles.liveMeta}>{host.viewers} katsojaa</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color="#64748b" />
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      <View style={styles.upcomingCard}>
-        <Ionicons name="calendar-outline" size={22} color="#0F62FE" />
-        <View style={{ flex: 1 }}>
-          <Text style={styles.upcomingTitle}>Tulevat livet</Text>
-          <Text style={styles.upcomingBody}>Ajastus ja muistutukset voidaan kytkeä tähän seuraavassa vaiheessa.</Text>
-        </View>
-      </View>
+      {renderLiveHubSection('LIVE NYT', 'Käynnissä olevat lähetykset', 'radio', liveNowHosts)}
+      {renderLiveHubSection('TULEVAT LIVET', 'Ajastetut lähetykset ja muistutukset', 'calendar', upcomingLiveHosts)}
+      {renderLiveHubSection('YHTEISÖLÄHETYKSET', 'Tekijöiden ja yhteisöjen omat huoneet', 'people', communityLiveHosts)}
 
       <Modal visible={!!activeHost} animationType="slide" onRequestClose={closeLiveModal}>
         <View style={styles.liveModal}>{liveDashboard}</View>
@@ -2118,6 +2195,112 @@ const styles = StyleSheet.create({
   kicker: { color: '#dc2626', fontSize: 12, fontWeight: '900', textTransform: 'uppercase', marginBottom: 5 },
   title: { color: '#111827', fontSize: 25, fontWeight: '900', marginBottom: 8 },
   body: { color: '#64748b', fontSize: 14, lineHeight: 20 },
+  liveHubSection: {
+    gap: 14,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: '#dbe4f0',
+    backgroundColor: '#fff',
+    padding: 16,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+  },
+  liveHubSectionHeader: { gap: 5 },
+  liveHubTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  liveHubSectionIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#dc2626',
+    shadowColor: '#dc2626',
+    shadowOpacity: 0.22,
+    shadowRadius: 10,
+  },
+  liveHubSectionTitle: { color: '#0f172a', fontSize: 18, fontWeight: '900', letterSpacing: 0 },
+  liveHubSectionSubtitle: { color: '#64748b', fontSize: 13, lineHeight: 18 },
+  liveHubGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+  liveHubGridMobile: { flexDirection: 'column', flexWrap: 'nowrap' },
+  liveHubCard: {
+    minWidth: 230,
+    gap: 16,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#1f2a44',
+    backgroundColor: '#08111f',
+    padding: 16,
+    shadowColor: '#0f62fe',
+    shadowOpacity: 0.14,
+    shadowRadius: 16,
+  },
+  liveHubCardDesktop: { flexGrow: 1 },
+  liveHubCardMobile: { width: '100%', minWidth: 0 },
+  liveHubCardTop: { minHeight: 26 },
+  liveHubBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
+  liveHubLiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#ef4444',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  liveHubLiveDot: { width: 7, height: 7, borderRadius: 999, backgroundColor: '#fff' },
+  liveHubLiveText: { color: '#fff', fontSize: 11, fontWeight: '900' },
+  liveHubScheduleBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#1d4ed8',
+    backgroundColor: 'rgba(37, 99, 235, 0.16)',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  liveHubScheduleText: { color: '#bfdbfe', fontSize: 11, fontWeight: '900' },
+  liveHubCategoryPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: '#334155',
+    backgroundColor: 'rgba(15, 23, 42, 0.72)',
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  liveHubCategoryText: { color: '#cbd5e1', fontSize: 11, fontWeight: '800' },
+  liveHubAvatarRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  liveHubAvatar: {
+    width: 54,
+    height: 54,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#60a5fa',
+    backgroundColor: '#0f172a',
+  },
+  liveHubAvatarText: { color: '#fff', fontSize: 20, fontWeight: '900' },
+  liveHubInfo: { flex: 1, minWidth: 0 },
+  liveHubName: { color: '#fff', fontSize: 17, fontWeight: '900' },
+  liveHubTopic: { color: '#93c5fd', fontSize: 13, fontWeight: '800', marginTop: 3 },
+  liveHubMetaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 10 },
+  liveHubMeta: { color: '#cbd5e1', fontSize: 12, fontWeight: '800', flexShrink: 1 },
+  liveHubCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderRadius: 999,
+    backgroundColor: '#0F62FE',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  liveHubCtaText: { color: '#fff', fontSize: 12, fontWeight: '900' },
   liveGrid: { gap: 12 },
   liveCard: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: '#fff', borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 16, padding: 14 },
   liveAvatarRing: { width: 58, height: 58, borderRadius: 29, borderWidth: 3, borderColor: '#ef4444', backgroundColor: '#111827', alignItems: 'center', justifyContent: 'center' },
