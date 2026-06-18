@@ -2235,7 +2235,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.14,
     shadowRadius: 16,
   },
-  liveHubCardDesktop: { flexGrow: 1 },
+  liveHubCardDesktop: { flexGrow: 0 },
   liveHubCardMobile: { width: '100%', minWidth: 0 },
   liveHubCardTop: { minHeight: 26 },
   liveHubBadgeRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8 },
