@@ -16,13 +16,15 @@ function YoslaHeroImage({ isWide, label }: { isWide: boolean; label: string }) {
       alt: label,
       style: {
         width: '100%',
-        height: isWide ? 560 : 420,
+        aspectRatio: '16 / 9',
+        height: 'auto',
         objectFit: 'contain',
         display: 'block',
         borderRadius: isWide ? 20 : 16,
         marginBottom: 20,
         backgroundColor: '#020617',
         border: '1px solid rgba(250,204,21,0.22)',
+        boxShadow: '0 24px 70px rgba(14, 165, 233, 0.22), 0 0 0 1px rgba(250, 204, 21, 0.08)',
         boxSizing: 'border-box',
       },
     });
@@ -188,7 +190,7 @@ const styles = StyleSheet.create({
   },
   shell: {
     width: '100%',
-    maxWidth: 920,
+    maxWidth: 1240,
     alignSelf: 'center',
   },
   loadingContainer: {
@@ -227,7 +229,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 25,
     color: '#cbd5e1',
-    maxWidth: 760,
+    maxWidth: 820,
     fontWeight: '600',
   },
   featureCard: {
@@ -352,16 +354,20 @@ const styles = StyleSheet.create({
   },
   heroImage: {
     width: '100%',
-    height: 560,
+    aspectRatio: 16 / 9,
     borderRadius: 20,
     marginBottom: 20,
     backgroundColor: '#020617',
     borderWidth: 1,
     borderColor: 'rgba(250,204,21,0.22)',
     objectFit: 'contain' as any,
+    shadowColor: '#38bdf8',
+    shadowOpacity: 0.22,
+    shadowOffset: { width: 0, height: 24 },
+    shadowRadius: 34,
+    elevation: 7,
   },
   heroImageMobile: {
-    height: 420,
     borderRadius: 16,
   },
 });
