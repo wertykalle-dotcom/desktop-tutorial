@@ -21,6 +21,7 @@ jest.mock('react-native', () => {
     Modal: createMockComponent('Modal'),
     Alert: { alert: jest.fn() },
     Platform: { OS: 'ios' },
+    useWindowDimensions: () => ({ width: 390, height: 844, scale: 1, fontScale: 1 }),
     StyleSheet: {
       create: (styles: Record<string, unknown>) => styles,
       flatten: (style: unknown) => style,
