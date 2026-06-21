@@ -122,6 +122,15 @@ export default function CreatePostScreen() {
     Alert.alert(t('error'), t('createUnsupportedMedia'));
   }, [applyWebImageFile, applyWebVideoFile, t]);
 
+  const pickWebMediaFile = useCallback(() => {
+    if (Platform.OS !== 'web') return;
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = `${IMAGE_ACCEPT},${VIDEO_ACCEPT}`;
+    input.onchange = () => handleDroppedFiles(input.files);
+    input.click();
+  }, [handleDroppedFiles]);
+
   useEffect(() => {
     if (Platform.OS !== 'web' || typeof window === 'undefined') return undefined;
 
@@ -478,9 +487,15 @@ export default function CreatePostScreen() {
                     handleDroppedFiles(event.dataTransfer?.files);
                   }}
                 >
-                  <Ionicons name="cloud-upload-outline" size={28} color={dragActive ? '#60a5fa' : '#94a3b8'} />
-                  <Text style={styles.dropZoneTitle}>{t('createDropMediaTitle')}</Text>
-                  <Text style={styles.dropZoneText}>{t('createDropMediaBody')}</Text>
+                  <TouchableOpacity
+                    activeOpacity={0.86}
+                    style={styles.dropZoneButton}
+                    onPress={pickWebMediaFile}
+                  >
+                    <Ionicons name="cloud-upload-outline" size={28} color={dragActive ? '#60a5fa' : '#94a3b8'} />
+                    <Text style={styles.dropZoneTitle}>{t('createDropMediaTitle')}</Text>
+                    <Text style={styles.dropZoneText}>{t('createDropMediaBody')}</Text>
+                  </TouchableOpacity>
                 </View>
               ) : null}
 
@@ -767,6 +782,11 @@ const styles = StyleSheet.create({
   dropZoneActive: {
     borderColor: '#60a5fa',
     backgroundColor: '#082f49',
+  },
+  dropZoneButton: {
+    width: '100%',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   dropZoneTitle: {
     marginTop: 8,
