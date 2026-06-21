@@ -189,9 +189,14 @@ const getTrackDiagnostics = (stream: MediaStream | null) => {
   };
 };
 
+const LIVE_RECORDING_VIDEO_BITRATE: Record<VideoQuality, number> = {
+  '720p': 2_500_000,
+  '1080p': 2_200_000,
+};
+
 const getReplayRecorderOptions = (mimeType: string, quality: VideoQuality): MediaRecorderOptions => ({
   mimeType,
-  videoBitsPerSecond: quality === '1080p' ? 3_200_000 : 2_500_000,
+  videoBitsPerSecond: LIVE_RECORDING_VIDEO_BITRATE[quality],
   audioBitsPerSecond: 128_000,
 });
 
@@ -204,12 +209,23 @@ const formatBytes = (bytes: number) => {
 
 const LIVE_RECORDING_CHUNK_THRESHOLD_BYTES = 8 * 1024 * 1024;
 const LIVE_RECORDING_CHUNK_SIZE_BYTES = 1024 * 1024;
+const LIVE_RECORDING_1080P_CHUNK_SIZE_BYTES = 512 * 1024;
 const LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES = [
   LIVE_RECORDING_CHUNK_SIZE_BYTES,
   512 * 1024,
   256 * 1024,
 ];
+const LIVE_RECORDING_1080P_CHUNK_FALLBACK_SIZES_BYTES = [
+  LIVE_RECORDING_1080P_CHUNK_SIZE_BYTES,
+  256 * 1024,
+  128 * 1024,
+];
 const LIVE_RECORDING_CHUNK_MAX_RETRIES = 3;
+
+const getLiveRecordingChunkSizes = (quality: VideoQuality) =>
+  quality === '1080p'
+    ? LIVE_RECORDING_1080P_CHUNK_FALLBACK_SIZES_BYTES
+    : LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES;
 
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -890,20 +906,22 @@ export default function LiveScreen() {
       if (shouldUseChunkedUpload) {
         const chunkHeaders = buildApiHeaders(undefined, token);
         let lastChunkedUploadError: unknown = null;
-        for (let sizeAttempt = 0; sizeAttempt < LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES.length; sizeAttempt += 1) {
-          const chunkSizeBytes = LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES[sizeAttempt];
+        const chunkSizeAttempts = getLiveRecordingChunkSizes(selectedVideoQuality);
+        for (let sizeAttempt = 0; sizeAttempt < chunkSizeAttempts.length; sizeAttempt += 1) {
+          const chunkSizeBytes = chunkSizeAttempts[sizeAttempt];
           const uploadId = `live_${user.user_id}_${Date.now()}_${sizeAttempt}_${Math.random().toString(36).slice(2, 8)}`;
           const totalChunks = Math.ceil(recordingFile.size / chunkSizeBytes);
           console.info('[live-recording] chunked upload started', {
             uploadId,
             sizeAttempt: sizeAttempt + 1,
-            totalSizeAttempts: LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES.length,
+            totalSizeAttempts: chunkSizeAttempts.length,
             totalChunks,
             chunkSize: chunkSizeBytes,
             chunkSizeLabel: formatBytes(chunkSizeBytes),
             fileSize: recordingFile.size,
             fileSizeLabel: formatBytes(recordingFile.size),
             selectedVideoQuality,
+            targetVideoBitsPerSecond: LIVE_RECORDING_VIDEO_BITRATE[selectedVideoQuality],
           });
           try {
             for (let index = 0; index < totalChunks; index += 1) {
@@ -1016,8 +1034,8 @@ export default function LiveScreen() {
               chunkSizeLabel: formatBytes(chunkSizeBytes),
               error: chunkedError,
             });
-            if (sizeAttempt < LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES.length - 1) {
-              const nextChunkSize = LIVE_RECORDING_CHUNK_FALLBACK_SIZES_BYTES[sizeAttempt + 1];
+            if (sizeAttempt < chunkSizeAttempts.length - 1) {
+              const nextChunkSize = chunkSizeAttempts[sizeAttempt + 1];
               setRecordingSaveMessage(`Yhteys katkesi. Yritetään uudelleen pienemmillä paloilla (${formatBytes(nextChunkSize)})...`);
               await wait(1000);
             }
@@ -1821,6 +1839,11 @@ export default function LiveScreen() {
                     );
                   })}
                 </View>
+                <Text style={styles.qualityHint}>
+                  {selectedVideoQuality === '1080p'
+                    ? '1080p käyttää pienempiä upload-paloja ja optimoitua bittivirtaa vakaampaan tallennukseen.'
+                    : '720p on suositeltu oletus pitkille ja varmatoimisille live-tallenteille.'}
+                </Text>
               </View>
               <View style={styles.deviceField}>
                 <Text style={styles.deviceLabel}>Kamera</Text>
@@ -2505,6 +2528,7 @@ const styles = StyleSheet.create({
   },
   qualityToggleText: { color: '#cbd5e1', fontSize: 12, fontWeight: '900' },
   qualityToggleTextActive: { color: '#fff' },
+  qualityHint: { color: '#94a3b8', fontSize: 11, lineHeight: 16, fontWeight: '700' },
   audioMeterRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   audioMeterTrack: { flex: 1, height: 10, borderRadius: 999, backgroundColor: '#1e293b', overflow: 'hidden', borderWidth: 1, borderColor: '#334155' },
   audioMeterFill: { height: '100%', borderRadius: 999 },
