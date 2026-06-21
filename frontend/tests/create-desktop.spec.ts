@@ -45,6 +45,17 @@ test('desktop create page shows composer and live preview without overflow', asy
   await page.getByPlaceholder('Kirjoita jotain...').fill('PC-polish julkaisu YOSLAan');
   await expect(page.locator('body')).toContainText('PC-polish julkaisu YOSLAan');
 
+  const dropZone = page.locator('#create-media-dropzone');
+  const droppedFile = await page.evaluateHandle(() => {
+    const dataTransfer = new DataTransfer();
+    const file = new File(['yosla-test-image'], 'yosla-drop-test.png', { type: 'image/png' });
+    dataTransfer.items.add(file);
+    return dataTransfer;
+  });
+  await dropZone.dispatchEvent('drop', { dataTransfer: droppedFile });
+  await expect(page.locator('body')).toContainText('yosla-drop-test.png');
+  expect(page.url()).toContain('/create');
+
   const hasOverflow = await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth + 2);
   expect(hasOverflow).toBe(false);
 });

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -74,7 +74,7 @@ export default function CreatePostScreen() {
     setPollOptions(['', '']);
   };
 
-  const applyWebImageFile = (file: File) => {
+  const applyWebImageFile = useCallback((file: File) => {
     if (!isAllowedImageFile(file)) {
       Alert.alert(t('error'), t('createUnsupportedImage'));
       return;
@@ -93,9 +93,9 @@ export default function CreatePostScreen() {
       Alert.alert(t('error'), t('createImagePickFailed'));
     };
     reader.readAsDataURL(file);
-  };
+  }, [t]);
 
-  const applyWebVideoFile = (file: File) => {
+  const applyWebVideoFile = useCallback((file: File) => {
     if (!isAllowedVideoFile(file)) {
       Alert.alert(t('error'), t('createUnsupportedVideo'));
       return;
@@ -105,10 +105,11 @@ export default function CreatePostScreen() {
     setImage(null);
     setVideo(URL.createObjectURL(file));
     setSelectedFileName(file.name);
-  };
+  }, [t]);
 
-  const handleDroppedFiles = (files?: FileList | null) => {
+  const handleDroppedFiles = useCallback((files?: FileList | null) => {
     if (!files?.length) return;
+    setDragActive(false);
     const file = files[0];
     if (isAllowedImageFile(file)) {
       applyWebImageFile(file);
@@ -119,7 +120,41 @@ export default function CreatePostScreen() {
       return;
     }
     Alert.alert(t('error'), t('createUnsupportedMedia'));
-  };
+  }, [applyWebImageFile, applyWebVideoFile, t]);
+
+  useEffect(() => {
+    if (Platform.OS !== 'web' || typeof window === 'undefined') return undefined;
+
+    const findDropZone = (target: EventTarget | null) =>
+      target instanceof Element ? target.closest('#create-media-dropzone') : null;
+
+    const hasDraggedFiles = (event: DragEvent) =>
+      Array.from(event.dataTransfer?.types ?? []).includes('Files');
+
+    const handleWindowDragOver = (event: DragEvent) => {
+      if (!hasDraggedFiles(event)) return;
+      event.preventDefault();
+      setDragActive(Boolean(findDropZone(event.target)));
+    };
+
+    const handleWindowDrop = (event: DragEvent) => {
+      if (!hasDraggedFiles(event)) return;
+      event.preventDefault();
+      const droppedInsideZone = Boolean(findDropZone(event.target));
+      setDragActive(false);
+      if (droppedInsideZone) {
+        handleDroppedFiles(event.dataTransfer?.files);
+      }
+    };
+
+    window.addEventListener('dragover', handleWindowDragOver);
+    window.addEventListener('drop', handleWindowDrop);
+
+    return () => {
+      window.removeEventListener('dragover', handleWindowDragOver);
+      window.removeEventListener('drop', handleWindowDrop);
+    };
+  }, [handleDroppedFiles]);
 
   const pickMedia = async (kind: 'image' | 'video') => {
     try {
@@ -415,20 +450,30 @@ export default function CreatePostScreen() {
 
               {Platform.OS === 'web' ? (
                 <View
+                  nativeID="create-media-dropzone"
                   style={[styles.dropZone, dragActive && styles.dropZoneActive]}
+                  // @ts-ignore - react-native-web passes DOM drag events through.
+                  onDragEnter={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation?.();
+                    setDragActive(true);
+                  }}
                   // @ts-ignore - react-native-web passes DOM drag events through.
                   onDragOver={(event) => {
                     event.preventDefault();
+                    event.stopPropagation?.();
                     setDragActive(true);
                   }}
                   // @ts-ignore - react-native-web passes DOM drag events through.
                   onDragLeave={(event) => {
                     event.preventDefault();
+                    event.stopPropagation?.();
                     setDragActive(false);
                   }}
                   // @ts-ignore - react-native-web passes DOM drop events through.
                   onDrop={(event) => {
                     event.preventDefault();
+                    event.stopPropagation?.();
                     setDragActive(false);
                     handleDroppedFiles(event.dataTransfer?.files);
                   }}
