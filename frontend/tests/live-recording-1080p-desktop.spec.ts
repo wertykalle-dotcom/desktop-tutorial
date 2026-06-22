@@ -140,6 +140,7 @@ test('desktop live recording uses chunked upload for 1080p clips', async ({ page
           fftSize: 256,
           frequencyBinCount: 32,
           getByteFrequencyData: (data: Uint8Array) => data.fill(24),
+          getByteTimeDomainData: (data: Uint8Array) => data.fill(136),
           disconnect: () => undefined,
         };
       }

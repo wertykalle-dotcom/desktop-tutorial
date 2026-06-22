@@ -441,34 +441,60 @@ export default function LiveScreen() {
     const AudioContextConstructor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!AudioContextConstructor) return undefined;
 
-    const audioContext = new AudioContextConstructor();
-    const analyser = audioContext.createAnalyser();
-    analyser.fftSize = 256;
-    const source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
-    source.connect(analyser);
-    const data = new Uint8Array(analyser.frequencyBinCount);
-    let animationFrame = 0;
-    let lastMeterUpdate = 0;
-
-    const updateLevel = () => {
-      analyser.getByteFrequencyData(data);
-      const now = performance.now();
-      if (now - lastMeterUpdate > 120) {
-        const average = data.reduce((sum, value) => sum + value, 0) / Math.max(data.length, 1);
-        setAudioLevel(Math.min(100, Math.round((average / 128) * 100)));
-        lastMeterUpdate = now;
+    let audioContext: AudioContext;
+    let source: MediaStreamAudioSourceNode;
+    try {
+      audioContext = new AudioContextConstructor();
+      if (audioContext.state === 'suspended') {
+        void audioContext.resume().catch((error) => {
+          console.warn('[live-audio-meter] AudioContext resume failed', error);
+        });
       }
-      animationFrame = requestAnimationFrame(updateLevel);
-    };
-    updateLevel();
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 2048;
+      analyser.smoothingTimeConstant = 0.72;
+      source = audioContext.createMediaStreamSource(new MediaStream([audioTrack]));
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.fftSize);
+      let animationFrame = 0;
+      let lastMeterUpdate = 0;
 
-    return () => {
-      cancelAnimationFrame(animationFrame);
-      source.disconnect();
-      analyser.disconnect();
-      void audioContext.close();
-    };
-  }, [localStream]);
+      const updateLevel = () => {
+        analyser.getByteTimeDomainData(data);
+        const now = performance.now();
+        if (now - lastMeterUpdate > 80) {
+          let sumSquares = 0;
+          for (let index = 0; index < data.length; index += 1) {
+            const centeredSample = (data[index] - 128) / 128;
+            sumSquares += centeredSample * centeredSample;
+          }
+          const rms = Math.sqrt(sumSquares / Math.max(data.length, 1));
+          const nextLevel = Math.min(100, Math.round(Math.max(0, rms - 0.008) * 360));
+          setAudioLevel(audioTrack.enabled && !isMuted ? nextLevel : 0);
+          lastMeterUpdate = now;
+        }
+        animationFrame = requestAnimationFrame(updateLevel);
+      };
+      updateLevel();
+
+      return () => {
+        cancelAnimationFrame(animationFrame);
+        source.disconnect();
+        analyser.disconnect();
+        void audioContext.close();
+      };
+    } catch (error) {
+      console.warn('[live-audio-meter] failed to initialize', {
+        error,
+        audioTrackState: audioTrack.readyState,
+        audioTrackEnabled: audioTrack.enabled,
+        audioTrackMuted: audioTrack.muted,
+        audioTrackSettings: typeof audioTrack.getSettings === 'function' ? audioTrack.getSettings() : null,
+      });
+      setAudioLevel(0);
+      return undefined;
+    }
+  }, [isMuted, localStream]);
 
   useEffect(() => {
     if (!activeRoomId) return;
